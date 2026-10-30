@@ -10,6 +10,6 @@ export default defineConfig({
   server: {
     host: true,
     port: 5173,
-    allowedHosts: ['.loca.lt'] // This allows all future localtunnel links to work
+    allowedHosts: ['.loca.lt', '.trycloudflare.com']
   }
 })
