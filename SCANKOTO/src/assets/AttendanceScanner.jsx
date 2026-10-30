@@ -4,13 +4,16 @@ import { Scanner } from '@yudiel/react-qr-scanner';
 const AttendanceScanner = () => {
   const [feedback, setFeedback] = useState(null);
   const [facingMode, setFacingMode] = useState('environment');
-  const [isSuccessFlash, setIsSuccessFlash] = useState(false);
   
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [manualId, setManualId] = useState('');
   
+  // Refs for logic management
   const feedbackTimeout = useRef(null);
+  const lastGlobalScanTimeRef = useRef(0); // Replaces buggy library scanDelay
+  const scannedIdsMapRef = useRef(new Map()); // Stores ID -> Timestamp
 
+  // Clean up timeouts on unmount
   useEffect(() => {
     return () => {
       if (feedbackTimeout.current) clearTimeout(feedbackTimeout.current);
@@ -20,6 +23,25 @@ const AttendanceScanner = () => {
   const processAttendance = (studentId) => {
     if (!studentId) return;
 
+    const now = Date.now();
+    const COOLDOWN_PERIOD_MS = 15 * 60 * 1000; // 15 minutes in milliseconds
+    const lastStudentScanTime = scannedIdsMapRef.current.get(studentId);
+    
+    let status = 'alert-success';
+    let message = `Student ID: ${studentId}`;
+    let borderClass = 'border-success'; // Green for success
+
+    // Check if this specific ID is in its 15-minute cooldown
+    if (lastStudentScanTime && (now - lastStudentScanTime < COOLDOWN_PERIOD_MS)) {
+      status = 'alert-warning';
+      message = `Already Scanned: ${studentId}`;
+      borderClass = 'border-warning'; // Yellow for warning
+    } else {
+      // Record new valid scan time
+      scannedIdsMapRef.current.set(studentId, now);
+    }
+
+    // Clear any existing visual reset timers
     if (feedbackTimeout.current) {
       clearTimeout(feedbackTimeout.current);
     }
@@ -32,23 +54,24 @@ const AttendanceScanner = () => {
     });
 
     setFeedback({
-      message: `Student ID: ${studentId}`,
-      timestamp: timestamp,
-      status: 'alert-success'
+      message,
+      timestamp,
+      status,
+      borderClass
     });
     
-    setIsSuccessFlash(true);
     setIsModalOpen(false); 
     setManualId(''); 
 
+    // Reset UI after 2 seconds
     feedbackTimeout.current = setTimeout(() => {
       setFeedback(null);
-      setIsSuccessFlash(false);
-    }, 3000);
+    }, 2000);
   };
 
   const handleManualSubmit = () => {
     if (manualId.trim() !== '') {
+      lastGlobalScanTimeRef.current = Date.now(); // Reset global debounce
       processAttendance(manualId.trim());
     }
   };
@@ -60,12 +83,19 @@ const AttendanceScanner = () => {
   return (
     <div className="min-h-screen bg-base-200 flex flex-col items-center justify-center p-4">
       
+      {/* Toast Popup Notification */}
       {feedback && (
-        <div className="toast toast-top toast-center z-50 animate-none">
+        <div className="toast toast-top toast-center z-50 animate-bounce">
           <div className={`alert ${feedback.status} shadow-lg font-sans`}>
-            <svg xmlns="http://www.w3.org/2000/svg" className="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
+            {feedback.status === 'alert-success' ? (
+              <svg xmlns="http://www.w3.org/2000/svg" className="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            ) : (
+              <svg xmlns="http://www.w3.org/2000/svg" className="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+            )}
             <div className="text-left ml-2">
               <h3 className="font-bold text-sm">{feedback.message}</h3>
               <div className="text-xs opacity-80">Recorded at: {feedback.timestamp}</div>
@@ -98,18 +128,28 @@ const AttendanceScanner = () => {
             </button>
           </div>
 
-          <div className={`w-full aspect-square rounded-2xl overflow-hidden border-4 bg-black relative shadow-inner transition-colors duration-300 ${isSuccessFlash ? 'border-success' : 'border-primary/20'}`}>
+          {/* Dynamic Border Container */}
+          <div className={`w-full aspect-square rounded-2xl overflow-hidden border-4 bg-black relative shadow-inner transition-colors duration-300 ${feedback ? feedback.borderClass : 'border-primary/20'}`}>
              <Scanner
                 onScan={(detectedCodes) => {
+                  // Custom 2000ms global debounce to prevent camera freezing
+                  if (Date.now() - lastGlobalScanTimeRef.current < 2000) return;
+                  
+                  let scannedText = null;
                   if (Array.isArray(detectedCodes) && detectedCodes.length > 0 && detectedCodes[0].rawValue) {
-                    processAttendance(detectedCodes[0].rawValue);
+                    scannedText = detectedCodes[0].rawValue;
                   } else if (typeof detectedCodes === 'string') {
-                    processAttendance(detectedCodes);
+                    scannedText = detectedCodes;
+                  }
+
+                  if (scannedText) {
+                    lastGlobalScanTimeRef.current = Date.now();
+                    processAttendance(scannedText);
                   }
                 }}
                 onError={(error) => console.error(error?.message)}
                 constraints={{ facingMode: facingMode }}
-                scanDelay={3000}
+                // removed scanDelay completely to fix the freeze bug
                 components={{
                     audio: true, 
                     onOff: true, 
