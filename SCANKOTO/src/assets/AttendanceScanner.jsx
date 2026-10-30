@@ -1,49 +1,36 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef } from 'react';
 import { Scanner } from '@yudiel/react-qr-scanner';
 
 const AttendanceScanner = () => {
-  const [feedback, setFeedback] = useState(null);
+  // Camera & Scanning State
   const [facingMode, setFacingMode] = useState('environment');
+  const [isScanning, setIsScanning] = useState(true); 
   
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  // Result Modal State
+  const [scanResult, setScanResult] = useState(null); 
+  
+  // Manual Input State
+  const [isManualModalOpen, setIsManualModalOpen] = useState(false);
   const [manualId, setManualId] = useState('');
   
-  // Refs for logic management
-  const feedbackTimeout = useRef(null);
-  const lastGlobalScanTimeRef = useRef(0); // Replaces buggy library scanDelay
-  const scannedIdsMapRef = useRef(new Map()); // Stores ID -> Timestamp
-
-  // Clean up timeouts on unmount
-  useEffect(() => {
-    return () => {
-      if (feedbackTimeout.current) clearTimeout(feedbackTimeout.current);
-    };
-  }, []);
+  // Memory for 15-minute cooldown
+  const scannedIdsMapRef = useRef(new Map());
 
   const processAttendance = (studentId) => {
-    if (!studentId) return;
+    // 1. Immediately stop the camera to prevent freezes and double-scans
+    setIsScanning(false);
 
     const now = Date.now();
-    const COOLDOWN_PERIOD_MS = 15 * 60 * 1000; // 15 minutes in milliseconds
+    const COOLDOWN_PERIOD_MS = 15 * 60 * 1000; // 15 minutes
     const lastStudentScanTime = scannedIdsMapRef.current.get(studentId);
     
-    let status = 'alert-success';
-    let message = `Student ID: ${studentId}`;
-    let borderClass = 'border-success'; // Green for success
+    let isDuplicate = false;
 
-    // Check if this specific ID is in its 15-minute cooldown
+    // 2. Check 15-minute cooldown
     if (lastStudentScanTime && (now - lastStudentScanTime < COOLDOWN_PERIOD_MS)) {
-      status = 'alert-warning';
-      message = `Already Scanned: ${studentId}`;
-      borderClass = 'border-warning'; // Yellow for warning
+      isDuplicate = true;
     } else {
-      // Record new valid scan time
       scannedIdsMapRef.current.set(studentId, now);
-    }
-
-    // Clear any existing visual reset timers
-    if (feedbackTimeout.current) {
-      clearTimeout(feedbackTimeout.current);
     }
 
     const timestamp = new Date().toLocaleTimeString('en-US', { 
@@ -53,27 +40,28 @@ const AttendanceScanner = () => {
       second: 'numeric' 
     });
 
-    setFeedback({
-      message,
+    // 3. Trigger Result Modal
+    setScanResult({
+      studentId,
       timestamp,
-      status,
-      borderClass
+      isDuplicate
     });
     
-    setIsModalOpen(false); 
+    // 4. Clean up manual input if it was used
+    setIsManualModalOpen(false); 
     setManualId(''); 
-
-    // Reset UI after 2 seconds
-    feedbackTimeout.current = setTimeout(() => {
-      setFeedback(null);
-    }, 2000);
   };
 
   const handleManualSubmit = () => {
     if (manualId.trim() !== '') {
-      lastGlobalScanTimeRef.current = Date.now(); // Reset global debounce
       processAttendance(manualId.trim());
     }
+  };
+
+  const resetScanner = () => {
+    // Closes the result modal and remounts a fresh camera instance
+    setScanResult(null);
+    setIsScanning(true);
   };
 
   const toggleCamera = () => {
@@ -83,27 +71,6 @@ const AttendanceScanner = () => {
   return (
     <div className="min-h-screen bg-base-200 flex flex-col items-center justify-center p-4">
       
-      {/* Toast Popup Notification */}
-      {feedback && (
-        <div className="toast toast-top toast-center z-50 animate-bounce">
-          <div className={`alert ${feedback.status} shadow-lg font-sans`}>
-            {feedback.status === 'alert-success' ? (
-              <svg xmlns="http://www.w3.org/2000/svg" className="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-            ) : (
-              <svg xmlns="http://www.w3.org/2000/svg" className="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-              </svg>
-            )}
-            <div className="text-left ml-2">
-              <h3 className="font-bold text-sm">{feedback.message}</h3>
-              <div className="text-xs opacity-80">Recorded at: {feedback.timestamp}</div>
-            </div>
-          </div>
-        </div>
-      )}
-
       <div className="card w-full max-w-md bg-base-100 shadow-xl">
         <div className="card-body items-center text-center">
           
@@ -113,7 +80,7 @@ const AttendanceScanner = () => {
                 SCANKOTO
               </h2>
               <p className="text-sm text-base-content/70">
-                Ready to scan.
+                {isScanning ? "Ready to scan." : "Scanner paused."}
               </p>
             </div>
             
@@ -121,6 +88,7 @@ const AttendanceScanner = () => {
               onClick={toggleCamera} 
               className="btn btn-circle btn-ghost"
               title="Switch Camera"
+              disabled={!isScanning}
             >
               <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -128,40 +96,47 @@ const AttendanceScanner = () => {
             </button>
           </div>
 
-          {/* Dynamic Border Container */}
-          <div className={`w-full aspect-square rounded-2xl overflow-hidden border-4 bg-black relative shadow-inner transition-colors duration-300 ${feedback ? feedback.borderClass : 'border-primary/20'}`}>
-             <Scanner
-                onScan={(detectedCodes) => {
-                  // Custom 2000ms global debounce to prevent camera freezing
-                  if (Date.now() - lastGlobalScanTimeRef.current < 2000) return;
-                  
-                  let scannedText = null;
-                  if (Array.isArray(detectedCodes) && detectedCodes.length > 0 && detectedCodes[0].rawValue) {
-                    scannedText = detectedCodes[0].rawValue;
-                  } else if (typeof detectedCodes === 'string') {
-                    scannedText = detectedCodes;
-                  }
+          {/* Camera Container */}
+          <div className="w-full aspect-square rounded-2xl overflow-hidden border-4 border-primary/20 bg-black relative shadow-inner flex items-center justify-center">
+             {/* Conditionally rendering the scanner completely mounts/unmounts it, bypassing the library freeze bug */}
+             {isScanning ? (
+               <Scanner
+                  onScan={(detectedCodes) => {
+                    let scannedText = null;
+                    if (Array.isArray(detectedCodes) && detectedCodes.length > 0 && detectedCodes[0].rawValue) {
+                      scannedText = detectedCodes[0].rawValue;
+                    } else if (typeof detectedCodes === 'string') {
+                      scannedText = detectedCodes;
+                    }
 
-                  if (scannedText) {
-                    lastGlobalScanTimeRef.current = Date.now();
-                    processAttendance(scannedText);
-                  }
-                }}
-                onError={(error) => console.error(error?.message)}
-                constraints={{ facingMode: facingMode }}
-                // removed scanDelay completely to fix the freeze bug
-                components={{
-                    audio: true, 
-                    onOff: true, 
-                    finder: true, 
-                }}
-             />
+                    if (scannedText) {
+                      processAttendance(scannedText);
+                    }
+                  }}
+                  onError={(error) => console.error(error?.message)}
+                  constraints={{ facingMode: facingMode }}
+                  components={{
+                      audio: true, 
+                      onOff: true, 
+                      finder: true, 
+                  }}
+               />
+             ) : (
+               <div className="text-white/50 flex flex-col items-center">
+                 <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 mb-2 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 9V5a2 2 0 00-2-2H6a2 2 0 00-2 2v14a2 2 0 002 2h2a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                 </svg>
+                 <span>Processing...</span>
+               </div>
+             )}
           </div>
 
+          {/* Manual Entry Button */}
           <div className="w-full mt-6">
             <button 
               className="btn btn-outline btn-primary w-full"
-              onClick={() => setIsModalOpen(true)}
+              onClick={() => setIsManualModalOpen(true)}
+              disabled={!isScanning}
             >
               <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
@@ -173,7 +148,44 @@ const AttendanceScanner = () => {
         </div>
       </div>
 
-      <dialog className={`modal ${isModalOpen ? 'modal-open' : ''}`}>
+      {/* --- MODAL 1: SCAN RESULT --- */}
+      <dialog className={`modal modal-bottom sm:modal-middle ${scanResult ? 'modal-open' : ''}`}>
+        <div className="modal-box text-center">
+          {scanResult?.isDuplicate ? (
+             <div className="w-16 h-16 rounded-full bg-warning/20 text-warning flex items-center justify-center mx-auto mb-4">
+               <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+               </svg>
+             </div>
+          ) : (
+             <div className="w-16 h-16 rounded-full bg-success/20 text-success flex items-center justify-center mx-auto mb-4">
+               <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+               </svg>
+             </div>
+          )}
+          
+          <h3 className="font-bold text-2xl mb-1">
+            {scanResult?.studentId}
+          </h3>
+          <p className={`font-semibold mb-4 ${scanResult?.isDuplicate ? 'text-warning' : 'text-success'}`}>
+            {scanResult?.isDuplicate ? 'Already Scanned (15m Cooldown)' : 'Attendance Recorded'}
+          </p>
+          <div className="text-sm opacity-70 mb-6">
+            Time: {scanResult?.timestamp}
+          </div>
+
+          <div className="modal-action mt-0 justify-center">
+            {/* This button resets the state and forces the camera to remount */}
+            <button className="btn btn-primary btn-wide" onClick={resetScanner}>
+              Scan Next
+            </button>
+          </div>
+        </div>
+      </dialog>
+
+      {/* --- MODAL 2: MANUAL ENTRY --- */}
+      <dialog className={`modal ${isManualModalOpen ? 'modal-open' : ''}`}>
         <div className="modal-box">
           <h3 className="font-bold text-lg">Manual Entry</h3>
           <p className="py-4 text-sm text-base-content/70">Enter the Student ID below if the QR code is damaged or unreadable.</p>
@@ -184,15 +196,15 @@ const AttendanceScanner = () => {
             value={manualId}
             onChange={(e) => setManualId(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleManualSubmit()}
-            autoFocus={isModalOpen}
+            autoFocus={isManualModalOpen}
           />
           <div className="modal-action mt-0">
-            <button className="btn" onClick={() => setIsModalOpen(false)}>Cancel</button>
+            <button className="btn" onClick={() => setIsManualModalOpen(false)}>Cancel</button>
             <button className="btn btn-primary" onClick={handleManualSubmit}>Submit</button>
           </div>
         </div>
         <form method="dialog" className="modal-backdrop">
-          <button onClick={() => setIsModalOpen(false)}>close</button>
+          <button onClick={() => setIsManualModalOpen(false)}>close</button>
         </form>
       </dialog>
 
