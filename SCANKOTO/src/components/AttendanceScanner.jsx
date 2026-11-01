@@ -1,7 +1,30 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Scanner } from '@yudiel/react-qr-scanner';
-import { saveAttendanceLog } from '../utils/db'; // Adjust path based on your folder structure
-    
+import { saveAttendanceLog, getPendingLogs } from '../utils/db'; 
+import { syncPendingRecords } from '../utils/sync'; 
+
+// Synthesize a reliable native hardware beep outside the component lifecycle
+const triggerBeep = () => {
+  try {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    const ctx = new AudioContext();
+    const oscillator = ctx.createOscillator();
+    const gainNode = ctx.createGain();
+
+    oscillator.type = 'sine';
+    oscillator.frequency.setValueAtTime(880, ctx.currentTime); 
+    gainNode.gain.setValueAtTime(0.5, ctx.currentTime); 
+
+    oscillator.connect(gainNode);
+    gainNode.connect(ctx.destination);
+
+    oscillator.start();
+    oscillator.stop(ctx.currentTime + 0.15); 
+  } catch (error) {
+    console.error("Native audio failed to play:", error);
+  }
+};
+
 const AttendanceScanner = () => {
   const [facingMode, setFacingMode] = useState('environment');
   const [isScanning, setIsScanning] = useState(true); 
@@ -10,10 +33,45 @@ const AttendanceScanner = () => {
   const [isManualModalOpen, setIsManualModalOpen] = useState(false);
   const [manualId, setManualId] = useState('');
   
+  // Phase 3: Network & Background Sync State
+  const [networkStatus, setNetworkStatus] = useState(navigator.onLine ? 'online' : 'offline');
+  const [pendingCount, setPendingCount] = useState(0);
+  const [isSyncing, setIsSyncing] = useState(false);
+
   const scannedIdsMapRef = useRef(new Map());
 
-  // Changed to async to handle the IndexedDB save operation
+  // Attach background listeners for PWA network events
+  useEffect(() => {
+    const refreshCount = async () => {
+      const logs = await getPendingLogs();
+      setPendingCount(logs.length);
+    };
+
+    refreshCount(); // Run on mount
+
+    const handleOnline = () => {
+      setNetworkStatus('online');
+      syncPendingRecords(); // Auto-trigger sync when Wi-Fi returns
+    };
+    const handleOffline = () => setNetworkStatus('offline');
+    const handleDbUpdate = () => refreshCount();
+    const handleSyncStatus = (e) => setIsSyncing(e.detail.isSyncing);
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    window.addEventListener('db-updated', handleDbUpdate);
+    window.addEventListener('sync-status', handleSyncStatus);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('db-updated', handleDbUpdate);
+      window.removeEventListener('sync-status', handleSyncStatus);
+    };
+  }, []);
+
   const processAttendance = async (studentId) => {
+    triggerBeep(); // Trigger reliable hardware beep
     setIsScanning(false);
 
     const now = Date.now();
@@ -27,13 +85,17 @@ const AttendanceScanner = () => {
     } else {
       scannedIdsMapRef.current.set(studentId, now);
       
-      // Save valid, non-duplicate scans to offline IndexedDB storage
       try {
         await saveAttendanceLog({
           studentId: studentId,
           timestamp: now,
-          eventId: 'general-assembly' // Can be made dynamic later
+          eventId: 'general-assembly' 
         });
+        
+        // Attempt immediate sync if connection is active
+        if (navigator.onLine) {
+          syncPendingRecords();
+        }
       } catch (error) {
         console.error("Failed to save to local database:", error);
       }
@@ -82,9 +144,18 @@ const AttendanceScanner = () => {
               <h2 className="card-title text-2xl font-bold text-primary mb-1">
                 SCANKOTO
               </h2>
-              <p className="text-sm text-base-content/70">
-                {isScanning ? "Ready to scan." : "Scanner paused."}
-              </p>
+              {/* Dynamic Network & Sync Status Header */}
+              <div className="flex items-center gap-2 text-sm text-base-content/70">
+                <span className={`badge badge-xs ${networkStatus === 'online' ? 'badge-success' : 'badge-error'}`}></span>
+                {networkStatus === 'online' ? 'Online' : 'Offline'}
+                
+                {pendingCount > 0 && (
+                  <span className="badge badge-neutral badge-sm ml-2 font-medium">
+                    {isSyncing && <span className="loading loading-spinner loading-xs mr-1"></span>}
+                    {pendingCount} Pending
+                  </span>
+                )}
+              </div>
             </div>
             
             <button 
@@ -117,7 +188,7 @@ const AttendanceScanner = () => {
                   onError={(error) => console.error(error?.message)}
                   constraints={{ facingMode: facingMode }}
                   components={{
-                      audio: true, 
+                      audio: false, // Disabled library audio to prevent race condition bug
                       onOff: true, 
                       finder: true, 
                   }}
@@ -125,7 +196,7 @@ const AttendanceScanner = () => {
              ) : (
                <div className="text-white/50 flex flex-col items-center">
                  <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 mb-2 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 9V5a2 2 0 00-2-2H6a2 2 0 00-2 2v14a2 2 0 002 2h2a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 9V5a2 2 0 00-2-2H6a2 2 0 00-2-2v14a2 2 0 002 2h2a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
                  </svg>
                  <span>Processing...</span>
                </div>
