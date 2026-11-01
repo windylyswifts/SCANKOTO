@@ -9,9 +9,9 @@ export default defineConfig({
     tailwindcss(),
     VitePWA({
       registerType: 'autoUpdate',
-      // Enables the service worker during 'npm run dev' for immediate testing
+      // Disabled in dev to prevent WebSocket crash conflicts
       devOptions: {
-        enabled: true 
+        enabled: false 
       },
       manifest: {
         name: 'SCANKOTO Attendance System',
@@ -34,12 +34,17 @@ export default defineConfig({
         ]
       },
       workbox: {
-        // Automatically caches all code and styling assets for offline rendering
         globPatterns: ['**/*.{js,css,html,ico,png,svg}']
       }
     })
   ],
   server: {
+    host: true,
+    port: 5173,
+    allowedHosts: ['.loca.lt', '.trycloudflare.com']
+  },
+  // Added preview config so the production build uses the same tunnel port
+  preview: {
     host: true,
     port: 5173,
     allowedHosts: ['.loca.lt', '.trycloudflare.com']
