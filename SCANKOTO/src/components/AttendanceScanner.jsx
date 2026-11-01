@@ -3,7 +3,6 @@ import { Scanner } from '@yudiel/react-qr-scanner';
 import { saveAttendanceLog, getPendingLogs } from '../utils/db'; 
 import { syncPendingRecords } from '../utils/sync'; 
 
-// Synthesize a reliable native hardware beep outside the component lifecycle
 const triggerBeep = () => {
   try {
     const AudioContext = window.AudioContext || window.webkitAudioContext;
@@ -33,25 +32,50 @@ const AttendanceScanner = () => {
   const [isManualModalOpen, setIsManualModalOpen] = useState(false);
   const [manualId, setManualId] = useState('');
   
-  // Phase 3: Network & Background Sync State
   const [networkStatus, setNetworkStatus] = useState(navigator.onLine ? 'online' : 'offline');
   const [pendingCount, setPendingCount] = useState(0);
   const [isSyncing, setIsSyncing] = useState(false);
 
-  const scannedIdsMapRef = useRef(new Map());
+  // Switched from Map to a standard Object for flawless JSON serialization
+  const scannedIdsRef = useRef({});
 
-  // Attach background listeners for PWA network events
+  // 1. Load existing cooldowns securely on mount
+  useEffect(() => {
+    const storedCooldowns = localStorage.getItem('scankoto_cooldowns');
+    if (storedCooldowns) {
+      try {
+        const parsed = JSON.parse(storedCooldowns);
+        const now = Date.now();
+        const COOLDOWN_PERIOD_MS = 15 * 60 * 1000;
+        const validEntries = {};
+        
+        // Loop through saved memory and only keep scans younger than 15 minutes
+        for (const id in parsed) {
+          if (now - parsed[id] < COOLDOWN_PERIOD_MS) {
+            validEntries[id] = parsed[id];
+          }
+        }
+        
+        scannedIdsRef.current = validEntries;
+        localStorage.setItem('scankoto_cooldowns', JSON.stringify(validEntries));
+      } catch (error) {
+        console.error("Failed to parse cooldown storage:", error);
+      }
+    }
+  }, []);
+
+  // 2. Attach background network & database listeners
   useEffect(() => {
     const refreshCount = async () => {
       const logs = await getPendingLogs();
       setPendingCount(logs.length);
     };
 
-    refreshCount(); // Run on mount
+    refreshCount(); 
 
     const handleOnline = () => {
       setNetworkStatus('online');
-      syncPendingRecords(); // Auto-trigger sync when Wi-Fi returns
+      syncPendingRecords(); 
     };
     const handleOffline = () => setNetworkStatus('offline');
     const handleDbUpdate = () => refreshCount();
@@ -71,19 +95,23 @@ const AttendanceScanner = () => {
   }, []);
 
   const processAttendance = async (studentId) => {
-    triggerBeep(); // Trigger reliable hardware beep
+    triggerBeep(); 
     setIsScanning(false);
 
     const now = Date.now();
     const COOLDOWN_PERIOD_MS = 15 * 60 * 1000; 
-    const lastStudentScanTime = scannedIdsMapRef.current.get(studentId);
+    
+    // Check the standard object for the timestamp
+    const lastStudentScanTime = scannedIdsRef.current[studentId];
     
     let isDuplicate = false;
 
     if (lastStudentScanTime && (now - lastStudentScanTime < COOLDOWN_PERIOD_MS)) {
       isDuplicate = true;
     } else {
-      scannedIdsMapRef.current.set(studentId, now);
+      // Save directly to the object and overwrite local storage immediately
+      scannedIdsRef.current[studentId] = now;
+      localStorage.setItem('scankoto_cooldowns', JSON.stringify(scannedIdsRef.current));
       
       try {
         await saveAttendanceLog({
@@ -92,7 +120,6 @@ const AttendanceScanner = () => {
           eventId: 'general-assembly' 
         });
         
-        // Attempt immediate sync if connection is active
         if (navigator.onLine) {
           syncPendingRecords();
         }
@@ -188,7 +215,7 @@ const AttendanceScanner = () => {
                   onError={(error) => console.error(error?.message)}
                   constraints={{ facingMode: facingMode }}
                   components={{
-                      audio: false, // Disabled library audio to prevent race condition bug
+                      audio: false, 
                       onOff: true, 
                       finder: true, 
                   }}
