@@ -1,5 +1,5 @@
 import React from 'react'
-import AttendanceScanner from './assets/AttendanceScanner'
+import AttendanceScanner from './components/AttendanceScanner'
 
 
 const App = () => {

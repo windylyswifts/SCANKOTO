@@ -1,36 +1,42 @@
 import React, { useState, useRef } from 'react';
 import { Scanner } from '@yudiel/react-qr-scanner';
+import { saveAttendanceLog } from '../utils/db'; // Adjust path based on your folder structure
 
 const AttendanceScanner = () => {
-  // Camera & Scanning State
   const [facingMode, setFacingMode] = useState('environment');
   const [isScanning, setIsScanning] = useState(true); 
-  
-  // Result Modal State
   const [scanResult, setScanResult] = useState(null); 
   
-  // Manual Input State
   const [isManualModalOpen, setIsManualModalOpen] = useState(false);
   const [manualId, setManualId] = useState('');
   
-  // Memory for 15-minute cooldown
   const scannedIdsMapRef = useRef(new Map());
 
-  const processAttendance = (studentId) => {
-    // 1. Immediately stop the camera to prevent freezes and double-scans
+  // Changed to async to handle the IndexedDB save operation
+  const processAttendance = async (studentId) => {
     setIsScanning(false);
 
     const now = Date.now();
-    const COOLDOWN_PERIOD_MS = 15 * 60 * 1000; // 15 minutes
+    const COOLDOWN_PERIOD_MS = 15 * 60 * 1000; 
     const lastStudentScanTime = scannedIdsMapRef.current.get(studentId);
     
     let isDuplicate = false;
 
-    // 2. Check 15-minute cooldown
     if (lastStudentScanTime && (now - lastStudentScanTime < COOLDOWN_PERIOD_MS)) {
       isDuplicate = true;
     } else {
       scannedIdsMapRef.current.set(studentId, now);
+      
+      // Save valid, non-duplicate scans to offline IndexedDB storage
+      try {
+        await saveAttendanceLog({
+          studentId: studentId,
+          timestamp: now,
+          eventId: 'general-assembly' // Can be made dynamic later
+        });
+      } catch (error) {
+        console.error("Failed to save to local database:", error);
+      }
     }
 
     const timestamp = new Date().toLocaleTimeString('en-US', { 
@@ -40,14 +46,12 @@ const AttendanceScanner = () => {
       second: 'numeric' 
     });
 
-    // 3. Trigger Result Modal
     setScanResult({
       studentId,
       timestamp,
       isDuplicate
     });
     
-    // 4. Clean up manual input if it was used
     setIsManualModalOpen(false); 
     setManualId(''); 
   };
@@ -59,7 +63,6 @@ const AttendanceScanner = () => {
   };
 
   const resetScanner = () => {
-    // Closes the result modal and remounts a fresh camera instance
     setScanResult(null);
     setIsScanning(true);
   };
@@ -96,9 +99,7 @@ const AttendanceScanner = () => {
             </button>
           </div>
 
-          {/* Camera Container */}
           <div className="w-full aspect-square rounded-2xl overflow-hidden border-4 border-primary/20 bg-black relative shadow-inner flex items-center justify-center">
-             {/* Conditionally rendering the scanner completely mounts/unmounts it, bypassing the library freeze bug */}
              {isScanning ? (
                <Scanner
                   onScan={(detectedCodes) => {
@@ -131,7 +132,6 @@ const AttendanceScanner = () => {
              )}
           </div>
 
-          {/* Manual Entry Button */}
           <div className="w-full mt-6">
             <button 
               className="btn btn-outline btn-primary w-full"
@@ -148,7 +148,6 @@ const AttendanceScanner = () => {
         </div>
       </div>
 
-      {/* --- MODAL 1: SCAN RESULT --- */}
       <dialog className={`modal modal-bottom sm:modal-middle ${scanResult ? 'modal-open' : ''}`}>
         <div className="modal-box text-center">
           {scanResult?.isDuplicate ? (
@@ -176,7 +175,6 @@ const AttendanceScanner = () => {
           </div>
 
           <div className="modal-action mt-0 justify-center">
-            {/* This button resets the state and forces the camera to remount */}
             <button className="btn btn-primary btn-wide" onClick={resetScanner}>
               Scan Next
             </button>
@@ -184,7 +182,6 @@ const AttendanceScanner = () => {
         </div>
       </dialog>
 
-      {/* --- MODAL 2: MANUAL ENTRY --- */}
       <dialog className={`modal ${isManualModalOpen ? 'modal-open' : ''}`}>
         <div className="modal-box">
           <h3 className="font-bold text-lg">Manual Entry</h3>
