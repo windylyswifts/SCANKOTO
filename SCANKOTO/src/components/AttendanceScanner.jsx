@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { Scanner } from '@yudiel/react-qr-scanner';
 import { saveAttendanceLog } from '../utils/db'; // Adjust path based on your folder structure
-
+    
 const AttendanceScanner = () => {
   const [facingMode, setFacingMode] = useState('environment');
   const [isScanning, setIsScanning] = useState(true); 
