@@ -36,10 +36,9 @@ const AttendanceScanner = () => {
   const [pendingCount, setPendingCount] = useState(0);
   const [isSyncing, setIsSyncing] = useState(false);
 
-  // Switched from Map to a standard Object for flawless JSON serialization
   const scannedIdsRef = useRef({});
 
-  // 1. Load existing cooldowns securely on mount
+  // Load existing cooldowns on mount to survive page reloads
   useEffect(() => {
     const storedCooldowns = localStorage.getItem('scankoto_cooldowns');
     if (storedCooldowns) {
@@ -49,7 +48,6 @@ const AttendanceScanner = () => {
         const COOLDOWN_PERIOD_MS = 15 * 60 * 1000;
         const validEntries = {};
         
-        // Loop through saved memory and only keep scans younger than 15 minutes
         for (const id in parsed) {
           if (now - parsed[id] < COOLDOWN_PERIOD_MS) {
             validEntries[id] = parsed[id];
@@ -64,7 +62,7 @@ const AttendanceScanner = () => {
     }
   }, []);
 
-  // 2. Attach background network & database listeners
+  // Background listeners for PWA network events and pending queues
   useEffect(() => {
     const refreshCount = async () => {
       const logs = await getPendingLogs();
@@ -101,15 +99,12 @@ const AttendanceScanner = () => {
     const now = Date.now();
     const COOLDOWN_PERIOD_MS = 15 * 60 * 1000; 
     
-    // Check the standard object for the timestamp
     const lastStudentScanTime = scannedIdsRef.current[studentId];
-    
     let isDuplicate = false;
 
     if (lastStudentScanTime && (now - lastStudentScanTime < COOLDOWN_PERIOD_MS)) {
       isDuplicate = true;
     } else {
-      // Save directly to the object and overwrite local storage immediately
       scannedIdsRef.current[studentId] = now;
       localStorage.setItem('scankoto_cooldowns', JSON.stringify(scannedIdsRef.current));
       

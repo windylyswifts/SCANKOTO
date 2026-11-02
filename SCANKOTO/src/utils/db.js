@@ -70,3 +70,17 @@ export const deleteLog = async (id) => {
     request.onerror = (event) => reject(event.target.error);
   });
 };
+
+export const getAllLogs = async () => {
+  const db = await initDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction([STORE_NAME], 'readonly');
+    const store = transaction.objectStore(STORE_NAME);
+    const request = store.getAll();
+
+    request.onsuccess = () => {
+      resolve(request.result || []);
+    };
+    request.onerror = (event) => reject(event.target.error);
+  });
+};
