@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { useParams } from 'react-router-dom';
 import { Scanner } from '@yudiel/react-qr-scanner';
 import { saveAttendanceLog, getPendingLogs } from '../utils/db'; 
 import { syncPendingRecords } from '../utils/sync'; 
@@ -25,6 +26,10 @@ const triggerBeep = () => {
 };
 
 const AttendanceScanner = () => {
+  // Extract dynamic eventId from the React Router URL
+  const { eventId } = useParams();
+  const activeEvent = eventId || 'unknown-event';
+
   const [facingMode, setFacingMode] = useState('environment');
   const [isScanning, setIsScanning] = useState(true); 
   const [scanResult, setScanResult] = useState(null); 
@@ -38,7 +43,6 @@ const AttendanceScanner = () => {
 
   const scannedIdsRef = useRef({});
 
-  // Load existing cooldowns on mount to survive page reloads
   useEffect(() => {
     const storedCooldowns = localStorage.getItem('scankoto_cooldowns');
     if (storedCooldowns) {
@@ -62,7 +66,6 @@ const AttendanceScanner = () => {
     }
   }, []);
 
-  // Background listeners for PWA network events and pending queues
   useEffect(() => {
     const refreshCount = async () => {
       const logs = await getPendingLogs();
@@ -99,6 +102,7 @@ const AttendanceScanner = () => {
     const now = Date.now();
     const COOLDOWN_PERIOD_MS = 15 * 60 * 1000; 
     
+    // Cooldown map check
     const lastStudentScanTime = scannedIdsRef.current[studentId];
     let isDuplicate = false;
 
@@ -112,7 +116,7 @@ const AttendanceScanner = () => {
         await saveAttendanceLog({
           studentId: studentId,
           timestamp: now,
-          eventId: 'general-assembly' 
+          eventId: activeEvent // Now securely pulled from URL params
         });
         
         if (navigator.onLine) {
@@ -166,7 +170,7 @@ const AttendanceScanner = () => {
               <h2 className="card-title text-2xl font-bold text-primary mb-1">
                 SCANKOTO
               </h2>
-              {/* Dynamic Network & Sync Status Header */}
+              {/* Network Status is the only metric visible in Kiosk mode */}
               <div className="flex items-center gap-2 text-sm text-base-content/70">
                 <span className={`badge badge-xs ${networkStatus === 'online' ? 'badge-success' : 'badge-error'}`}></span>
                 {networkStatus === 'online' ? 'Online' : 'Offline'}
@@ -236,6 +240,10 @@ const AttendanceScanner = () => {
               </svg>
               Enter ID Manually
             </button>
+          </div>
+          
+          <div className="mt-4 text-center">
+            <span className="text-xs text-base-content/50 font-mono">Event: {activeEvent}</span>
           </div>
 
         </div>

@@ -3,25 +3,21 @@ export const exportToCSV = (logs) => {
     alert("No attendance records to export.");
     return;
   }
-j
-  // Define spreadsheet headers
+
   const headers = ['Student ID', 'Timestamp', 'Event ID', 'Sync Status'];
   
-  // Map JSON data to CSV rows
   const rows = logs.map(log => [
     log.studentId,
     new Date(log.timestamp).toLocaleString('en-US'),
-    log.eventId || 'general-assembly',
+    log.eventId || 'unknown-event',
     log.syncStatus
   ]);
 
-  // Construct CSV text payload
   const csvContent = [
     headers.join(','), 
     ...rows.map(row => row.join(','))
   ].join('\n');
 
-  // Trigger browser download via Blob
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   

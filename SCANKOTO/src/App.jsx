@@ -1,13 +1,23 @@
-import React from 'react'
-import AttendanceScanner from './components/AttendanceScanner'
+import React from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import AttendanceScanner from './components/AttendanceScanner';
+import Dashboard from './components/Dashboard';
 
-
-const App = () => {
+function App() {
   return (
-    <div data-theme="light">
-      <AttendanceScanner/>
-    </div>
-  )
+    <Router>
+      <Routes>
+        {/* Admin Hub */}
+        <Route path="/dashboard" element={<Dashboard />} />
+        
+        {/* Isolated Kiosk Mode - Requires an Event ID in the URL */}
+        <Route path="/scan/:eventId" element={<AttendanceScanner />} />
+        
+        {/* Default fallback */}
+        <Route path="*" element={<Navigate to="/dashboard" replace />} />
+      </Routes>
+    </Router>
+  );
 }
 
-export default App
+export default App;
