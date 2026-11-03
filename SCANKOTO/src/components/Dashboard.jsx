@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { getAllLogs } from '../utils/db';
 import { exportToCSV } from '../utils/export';
 
@@ -66,7 +66,6 @@ const Dashboard = () => {
     const handleMouseMove = (e) => {
       if (!isDragging || isMobile) return;
       const newWidth = window.innerWidth - e.clientX;
-      // Constrain width safely between 250px and 500px
       if (newWidth > 250 && newWidth < 500) {
         setRightPanelWidth(newWidth);
       }
@@ -142,16 +141,16 @@ const Dashboard = () => {
           <p className="text-xs text-base-content/50 uppercase font-semibold mb-4 px-2">Dashboards</p>
           <ul className="menu bg-base-100 w-full p-0 gap-1">
             <li>
-              <a className="active bg-base-200 text-base-content font-medium rounded-xl">
+              <Link to="/dashboard" className="active bg-base-200 text-base-content font-medium rounded-xl">
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 3.055A9.001 9.001 0 1020.945 13H11V3.055z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20.488 9H15V3.512A9.025 9.025 0 0120.488 9z" /></svg>
                 Overview
-              </a>
+              </Link>
             </li>
             <li>
-              <a className="hover:bg-base-200 rounded-xl font-medium" onClick={() => navigate('/scan/general-assembly')}>
+              <Link to="/create-event" className="hover:bg-base-200 rounded-xl font-medium">
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
                 Create Event
-              </a>
+              </Link>
             </li>
           </ul>
         </div>
