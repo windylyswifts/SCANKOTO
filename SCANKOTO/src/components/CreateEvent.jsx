@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import readXlsxFile from 'read-excel-file';
+import { supabase } from '../utils/supabaseClient';
 
 const CreateEvent = () => {
   const navigate = useNavigate();
@@ -27,10 +27,12 @@ const CreateEvent = () => {
   const [renderHours, setRenderHours] = useState(0);
   const [renderMinutes, setRenderMinutes] = useState(0);
 
-  // --- File & Headcount State ---
+  // --- File, Headcount & Masterlist State ---
   const [masterlistFile, setMasterlistFile] = useState(null);
+  const [parsedStudents, setParsedStudents] = useState([]);
   const [expectedHeadcount, setExpectedHeadcount] = useState('');
   const [isDragActive, setIsDragActive] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // --- File Drag & Drop Handlers ---
   const handleDragOver = (e) => {
@@ -43,37 +45,63 @@ const CreateEvent = () => {
     setIsDragActive(false);
   };
 
-  // Upgraded Engine: Handles both Native CSV & Secure XLSX Parsing
-  const processFile = async (file) => {
-    if (!file) return;
-    
-    try {
-      if (file.name.endsWith('.csv')) {
-        setMasterlistFile(file);
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          const text = e.target.result;
-          const rows = text.split('\n').filter(row => row.trim().length > 0);
-          const count = rows.length > 1 ? rows.length - 1 : 0;
-          setExpectedHeadcount(count.toString());
-        };
-        reader.readAsText(file);
-        
-      } else if (file.name.endsWith('.xlsx')) {
-        setMasterlistFile(file);
-        const rows = await readXlsxFile(file);
-        const count = rows.length > 1 ? rows.length - 1 : 0;
-        setExpectedHeadcount(count.toString());
-        
-      } else {
-        alert("Unsupported file format. Please upload a .csv or .xlsx file.");
-        setMasterlistFile(null);
-        setExpectedHeadcount('');
+  // Helper: Bulletproof CSV Parser
+  const parseCSVToStudentObjects = (text) => {
+    const lines = text.split(/\r?\n/).filter(line => line.trim().length > 0);
+    if (lines.length < 2) return [];
+
+    const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
+    const students = [];
+
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].split(',').map(c => c.trim());
+      if (cols.length < headers.length) continue;
+
+      const studentObj = {};
+      headers.forEach((header, index) => {
+        studentObj[header] = cols[index] || '';
+      });
+
+      const studentId = studentObj.student_id;
+      if (studentId) {
+        students.push({
+          student_id: studentId,
+          full_name: studentObj.full_name || 'Unknown',
+          year_level: studentObj.year_level || 'N/A',
+          course: studentObj.course || 'Unknown',
+          email: studentObj.email || '',
+          qr_hash: studentObj.qr_hash || ''
+        });
       }
-    } catch (error) {
-      console.error("Error parsing file:", error);
-      alert("Failed to read the file. Please ensure it is a valid spreadsheet.");
+    }
+    return students;
+  };
+
+  const processFile = (file) => {
+    if (!file) return;
+
+    if (file.name.endsWith('.csv')) {
+      setMasterlistFile(file);
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const text = e.target.result;
+        const students = parseCSVToStudentObjects(text);
+        
+        if (students.length === 0) {
+          alert("Error: The CSV is empty or the column headers do not match (requires 'student_id').");
+          setMasterlistFile(null);
+          setExpectedHeadcount('');
+          return;
+        }
+
+        setParsedStudents(students);
+        setExpectedHeadcount(students.length.toString());
+      };
+      reader.readAsText(file);
+    } else {
+      alert("Invalid file format. Please upload a valid .csv file.");
       setMasterlistFile(null);
+      setParsedStudents([]);
       setExpectedHeadcount('');
     }
   };
@@ -92,46 +120,67 @@ const CreateEvent = () => {
     }
   };
 
-  // --- Strict Validation & Submit Handler ---
-  const handleConfirmEvent = () => {
-    if (!eventName.trim()) {
-      alert("Please enter an Event Title.");
-      return;
+  // --- Supabase Batch Submission Handler ---
+  const handleConfirmEvent = async () => {
+    if (!eventName.trim()) { alert("Please enter an Event Title."); return; }
+    if (!eventDescription.trim()) { alert("Please provide an Event Description."); return; }
+    if (!startTime) { alert("Please select the Event Start time."); return; }
+    if (!endTime) { alert("Please select the Event End time."); return; }
+    if (new Date(endTime) <= new Date(startTime)) { alert("The Event End time must occur after the Start time."); return; }
+    
+    if (!masterlistFile || parsedStudents.length === 0) { 
+      alert("Please upload a valid Student Masterlist (.csv) containing at least one valid student record."); 
+      return; 
     }
-    if (!eventDescription.trim()) {
-      alert("Please provide an Event Description.");
-      return;
-    }
-    if (!startTime) {
-      alert("Please select the Event Start time.");
-      return;
-    }
-    if (!endTime) {
-      alert("Please select the Event End time.");
-      return;
-    }
-    if (new Date(endTime) <= new Date(startTime)) {
-      alert("The Event End time must occur after the Start time.");
-      return;
-    }
-    if (!masterlistFile) {
-      alert("Please upload the Student Masterlist (.csv or .xlsx) file to establish the headcount.");
-      return;
-    }
+
+    setIsSubmitting(true);
+
+    const eventIdSlug = eventName.trim().toLowerCase().replace(/\s+/g, '-');
 
     const newEventConfig = {
-      name: eventName.trim(),
+      event_id: eventIdSlug,
+      event_name: eventName.trim(),
       description: eventDescription.trim(),
-      start: startTime,
-      end: endTime,
-      attendanceRequired: isAttendanceRequired === 'yes',
-      timeToRender: isAttendanceRequired === 'yes' ? { hours: renderHours, minutes: renderMinutes } : { hours: 0, minutes: 0 },
-      expectedHeadcount: Number(expectedHeadcount) || 0,
-      fileName: masterlistFile.name
+      start_time: new Date(startTime).toISOString(),
+      end_time: new Date(endTime).toISOString(),
+      min_duration_minutes: isAttendanceRequired === 'yes' ? (renderHours * 60 + renderMinutes) : 0,
+      expected_headcount: parsedStudents.length,
+      created_by: 'CSU-ISS Admin'
     };
 
-    console.log("Event Confirmed Payload:", newEventConfig);
-    alert("Event Created Successfully! (Check console for payload)");
+    // 1. Upsert Event Metadata
+    const { error: eventError } = await supabase
+      .from('events')
+      .upsert([newEventConfig], { onConflict: 'event_id' });
+
+    if (eventError) {
+      console.error("Supabase Event Insert Error:", eventError);
+      alert("Failed to save event to cloud: " + eventError.message);
+      setIsSubmitting(false);
+      return;
+    }
+
+    // 2. Batch Upsert Students with strict verification (.select())
+    const { data: insertedStudents, error: studentError } = await supabase
+      .from('students')
+      .upsert(parsedStudents, { onConflict: 'student_id' })
+      .select();
+
+    setIsSubmitting(false);
+
+    if (studentError) {
+      console.error("Supabase Students Import Error:", studentError);
+      alert("Event created, but failed to import student masterlist. Details: " + studentError.message);
+      return;
+    }
+
+    // Strict safety check: Ensure data actually made it into the database
+    if (!insertedStudents || insertedStudents.length === 0) {
+      alert("Warning: The event was created, but Supabase blocked the student upload due to a missing RLS policy. Please run the SQL command provided.");
+      return;
+    }
+
+    alert(`Success! Event "${newEventConfig.event_name}" created and ${insertedStudents.length} students synced to the cloud.`);
     navigate('/dashboard');
   };
 
@@ -282,7 +331,7 @@ const CreateEvent = () => {
                   </div>
 
                   <div className="form-control w-full">
-                    <label className="label"><span className="label-text font-medium">Student Masterlist (.csv, .xlsx)</span></label>
+                    <label className="label"><span className="label-text font-medium">Student Masterlist (.csv)</span></label>
                     
                     <div 
                       className={`relative border-2 border-dashed rounded-xl p-6 flex flex-col items-center justify-center text-center transition-colors cursor-pointer
@@ -292,10 +341,9 @@ const CreateEvent = () => {
                       onDragLeave={handleDragLeave}
                       onDrop={handleDrop}
                     >
-                      {/* Added .xlsx to the accept string so it shows in the file explorer */}
                       <input 
                         type="file" 
-                        accept=".csv, .xlsx, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel"
+                        accept=".csv"
                         className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                         onChange={handleFileChange}
                       />
@@ -311,8 +359,7 @@ const CreateEvent = () => {
                         </div>
                       ) : (
                         <div className="text-sm px-2">
-                          <span className="text-primary font-semibold">Select a file</span> or drag and drop a file here
-                          <p className="text-xs opacity-50 mt-2">.csv and .xlsx formats are supported.</p>
+                          <span className="text-primary font-semibold">Select a .csv file</span> or drag and drop it here
                         </div>
                       )}
                     </div>
@@ -324,10 +371,10 @@ const CreateEvent = () => {
             </div>
             
             <div className="bg-base-200/50 px-6 py-5 md:px-10 border-t border-base-200 flex justify-between items-center rounded-b-2xl">
-              <button className="btn btn-ghost text-slate-500" onClick={() => navigate('/dashboard')}>Discard</button>
-              <button className="btn btn-primary px-8 shadow-sm" onClick={handleConfirmEvent}>
-                Launch Event
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 ml-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" /></svg>
+              <button className="btn btn-ghost text-slate-500" onClick={() => navigate('/dashboard')} disabled={isSubmitting}>Discard</button>
+              <button className="btn btn-primary px-8 shadow-sm" onClick={handleConfirmEvent} disabled={isSubmitting}>
+                {isSubmitting ? 'Syncing to Cloud...' : 'Launch Event'}
+                {!isSubmitting && <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 ml-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" /></svg>}
               </button>
             </div>
           </div>
