@@ -62,7 +62,6 @@ const AttendanceScanner = () => {
 
   const scannedIdsRef = useRef({});
 
-  // Direct fetch function to guarantee accurate pending counts
   const refreshPendingCount = async () => {
     try {
       const logs = await getPendingLogs();
@@ -72,6 +71,7 @@ const AttendanceScanner = () => {
     }
   };
 
+  // Restored: Clean, un-debounced mount and network hooks
   useEffect(() => {
     const checkLocalCacheState = async () => {
       try {
@@ -86,8 +86,35 @@ const AttendanceScanner = () => {
       } catch (err) {}
     };
     checkLocalCacheState();
-    refreshPendingCount(); // Initial load
-  }, []);
+
+    const handleOnline = async () => {
+      setNetworkStatus('online');
+      setIsSyncing(true);
+      await syncPendingRecords();
+      setIsSyncing(false);
+      refreshPendingCount(); // Force state update
+    };
+
+    const handleOffline = () => setNetworkStatus('offline');
+    const handleDbUpdate = () => refreshPendingCount();
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    window.addEventListener('db-updated', handleDbUpdate);
+
+    // Initial background sync attempt on startup if online
+    if (navigator.onLine) {
+      syncPendingRecords().then(() => refreshPendingCount());
+    } else {
+      refreshPendingCount();
+    }
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('db-updated', handleDbUpdate);
+    };
+  }, []); // Run once, no closure traps
 
   useEffect(() => {
     if (activeEvent !== 'unknown-event' && !eventId) {
@@ -112,31 +139,6 @@ const AttendanceScanner = () => {
         localStorage.setItem('scankoto_cooldowns', JSON.stringify(validEntries));
       } catch (error) {}
     }
-  }, []);
-
-  useEffect(() => {
-    const handleOnline = async () => {
-      setNetworkStatus('online');
-      setIsSyncing(true);
-      const success = await syncPendingRecords();
-      setIsSyncing(false);
-      // STRICT REFRESH: Force UI to re-read the database after sync finishes
-      if (success) refreshPendingCount();
-    };
-
-    const handleOffline = () => setNetworkStatus('offline');
-    const handleDbUpdate = () => refreshPendingCount();
-
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-    // Listen for custom db updates just in case Dashboard writes something
-    window.addEventListener('db-updated', handleDbUpdate);
-
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-      window.removeEventListener('db-updated', handleDbUpdate);
-    };
   }, []);
 
   const handlePreCache = async () => {
@@ -299,13 +301,15 @@ const AttendanceScanner = () => {
       };
     }
 
-    refreshPendingCount();
+    // Force count update locally first
+    await refreshPendingCount();
 
+    // Trigger sync safely and wait for resolution
     if (navigator.onLine) {
       setIsSyncing(true);
-      const success = await syncPendingRecords();
+      await syncPendingRecords();
       setIsSyncing(false);
-      if (success) refreshPendingCount();
+      refreshPendingCount(); // Refresh again to pick up 'synced' changes
     }
 
     setScanResult(resultPayload);
