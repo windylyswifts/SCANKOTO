@@ -1,20 +1,20 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../utils/supabaseClient';
-import { getAllLogs } from '../utils/db';
+import { getPendingLogs } from '../utils/db'; // Changed to only fetch pending local logs
 import { exportToCSV } from '../utils/export';
 import { useAuth } from '../contexts/AuthContext';
 
 const Dashboard = () => {
   const { user } = useAuth();
-  
+
   // --- Cloud Data State ---
   const [cloudEvents, setCloudEvents] = useState([]);
-  const [activeEvent, setActiveEvent] = useState(null); 
+  const [activeEvent, setActiveEvent] = useState(null);
 
-  // --- Local Data State ---
+  // --- Master Log State ---
   const [logs, setLogs] = useState([]);
   const [notifications, setNotifications] = useState([]);
-  
+
   // --- UI State ---
   const [searchQuery, setSearchQuery] = useState('');
   const [isCopied, setIsCopied] = useState(false);
@@ -30,7 +30,7 @@ const Dashboard = () => {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // Fetch events the logged-in user owns or has access to
+  // 1. Fetch accessible events on mount
   useEffect(() => {
     const loadEventsFromCloud = async () => {
       const { data, error } = await supabase
@@ -42,36 +42,94 @@ const Dashboard = () => {
         console.error("Error fetching events:", error);
       } else if (data && data.length > 0) {
         setCloudEvents(data);
-        setActiveEvent(data[0]); 
+        setActiveEvent(data[0]);
       }
     };
     if (user) loadEventsFromCloud();
   }, [user]);
 
-  const loadLogs = async () => {
+  // 2. The Hybrid Fetcher: Merges Cloud Truth with Local Pending Scans
+  const loadMergedLogs = async () => {
+    if (!activeEvent?.event_id) return;
+
     try {
-      const data = await getAllLogs();
-      data.sort((a, b) => b.timestamp - a.timestamp);
-      
+      // Fetch the Cloud Master Ledger
+      const { data: cloudData, error } = await supabase
+        .from('attendance_logs')
+        .select('student_id, check_in_time, check_out_time, status')
+        .eq('event_id', activeEvent.event_id);
+
+      if (error) throw error;
+
+      // Map cloud data to match our local table format
+      const formattedCloudLogs = (cloudData || []).map(row => ({
+        id: `cloud-${row.student_id}`, // temporary unique ID for React keys
+        studentId: row.student_id,
+        timestamp: new Date(row.check_in_time).getTime(),
+        syncStatus: 'synced',
+        status: row.status
+      }));
+
+      // Fetch Local Pending Logs (in case the current device is offline but scanning)
+      const localPending = await getPendingLogs();
+      const eventPending = localPending.filter(log => log.eventId === activeEvent.event_id);
+
+      // Merge Strategy: If a student exists in pending, it overrides the cloud view locally
+      const pendingIds = new Set(eventPending.map(l => l.studentId));
+      const finalCloudLogs = formattedCloudLogs.filter(l => !pendingIds.has(l.studentId));
+
+      const merged = [...finalCloudLogs, ...eventPending];
+      merged.sort((a, b) => b.timestamp - a.timestamp); // Newest first
+
       setLogs(prevLogs => {
-        if (data.length > prevLogs.length && prevLogs.length !== 0) {
+        // Notification trigger if a NEW scan came in
+        if (merged.length > prevLogs.length && prevLogs.length !== 0) {
           setNotifications(prev => [
-            { id: Date.now(), text: 'Live count Updated', time: new Date() },
+            { id: Date.now(), text: 'Live count updated from cloud', time: new Date() },
             ...prev
           ].slice(0, 5));
         }
-        return data;
+        return merged;
       });
-    } catch (error) {
-      console.error("Failed to load local logs:", error);
+
+    } catch (err) {
+      console.error("Failed to load hybrid logs:", err);
     }
   };
 
+  // 3. Trigger Hybrid Fetcher when Active Event changes or local DB updates
   useEffect(() => {
-    loadLogs();
-    window.addEventListener('db-updated', loadLogs);
-    return () => window.removeEventListener('db-updated', loadLogs);
-  }, []);
+    loadMergedLogs();
+    window.addEventListener('db-updated', loadMergedLogs);
+    return () => window.removeEventListener('db-updated', loadMergedLogs);
+  }, [activeEvent]);
+
+  // 4. SUPABASE REALTIME SUBSCRIPTION
+  // Listens to the cloud database and re-fetches when another device pushes a scan
+  useEffect(() => {
+    if (!activeEvent?.event_id) return;
+
+    const channel = supabase
+      .channel(`public:attendance_logs:event_id=eq.${activeEvent.event_id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*', // Listen to INSERTs and UPDATEs
+          schema: 'public',
+          table: 'attendance_logs',
+          filter: `event_id=eq.${activeEvent.event_id}`
+        },
+        (payload) => {
+          console.log("Realtime Cloud Update Received:", payload);
+          loadMergedLogs(); // Instantly refresh the UI
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [activeEvent]);
 
   // Right Panel Resize Logic (Desktop)
   useEffect(() => {
@@ -87,7 +145,7 @@ const Dashboard = () => {
     if (isDragging) {
       document.addEventListener('mousemove', handleMouseMove);
       document.addEventListener('mouseup', handleMouseUp);
-      document.body.style.userSelect = 'none'; 
+      document.body.style.userSelect = 'none';
     } else {
       document.body.style.userSelect = '';
     }
@@ -101,18 +159,17 @@ const Dashboard = () => {
   const activeEventName = activeEvent?.event_name || 'Loading...';
   const expectedCount = activeEvent?.expected_headcount || 0;
   const targetDuration = activeEvent?.min_duration_minutes || 0;
-  
-  const eventLogs = logs.filter(log => log.eventId === activeEventId);
-  const filteredTableLogs = eventLogs.filter(log => 
+
+  const filteredTableLogs = logs.filter(log =>
     log.studentId && log.studentId.toLowerCase().includes(searchQuery.toLowerCase())
   );
-  
-  const totalCount = eventLogs.length;
+
+  const totalCount = logs.length;
 
   const handleEmailReport = (emailAddress) => {
     const subject = encodeURIComponent(`Attendance Report: ${activeEventName}`);
     const body = encodeURIComponent(
-      `Hello,\n\nHere is the real-time summary for ${activeEventName}:\n\nTotal Headcount: ${totalCount}/${expectedCount}\nPending Server Sync: ${eventLogs.filter(l => l.syncStatus === 'pending').length}\n\n* Note: To view the raw CSV/XLSX spreadsheet, please click the Export button on the dashboard.\n\nBest,\nSCANKOTO System`
+      `Hello,\n\nHere is the real-time summary for ${activeEventName}:\n\nTotal Headcount: ${totalCount}/${expectedCount}\nPending Server Sync: ${logs.filter(l => l.syncStatus === 'pending').length}\n\n* Note: To view the raw CSV/XLSX spreadsheet, please click the Export button on the dashboard.\n\nBest,\nSCANKOTO System`
     );
     window.location.href = `mailto:${emailAddress}?subject=${subject}&body=${body}`;
   };
@@ -128,12 +185,12 @@ const Dashboard = () => {
   return (
     <div className="flex-1 flex overflow-hidden">
       <main className="flex-1 overflow-y-auto bg-base-100 p-4 md:p-8 flex flex-col relative w-full">
-        
+
         {/* Header */}
         <div className="flex justify-between items-center mb-8">
           <h1 className="text-2xl font-bold">Overview</h1>
           <div className="flex items-center gap-2">
-            
+
             {/* Dynamic Event Dropdown */}
             <div className="dropdown dropdown-end">
               <div tabIndex={0} role="button" className="btn btn-ghost btn-sm font-semibold uppercase text-xs">
@@ -145,8 +202,8 @@ const Dashboard = () => {
                 ) : (
                   cloudEvents.map(evt => (
                     <li key={evt.event_id}>
-                      <a 
-                        onClick={() => setActiveEvent(evt)} 
+                      <a
+                        onClick={() => setActiveEvent(evt)}
                         className={activeEventId === evt.event_id ? "active" : ""}
                       >
                         {evt.event_name}
@@ -158,7 +215,7 @@ const Dashboard = () => {
             </div>
 
             {/* Right Panel Toggle Button */}
-            <button 
+            <button
               onClick={() => {
                 if (isMobile) setIsRightPanelOpenMobile(!isRightPanelOpenMobile);
                 else setIsRightPanelOpenDesktop(!isRightPanelOpenDesktop);
@@ -178,10 +235,10 @@ const Dashboard = () => {
               <p className="text-4xl font-bold text-slate-800">{totalCount}<span className="text-2xl text-slate-400">/{expectedCount}</span></p>
             </div>
           </div>
-          
-          <div 
+
+          <div
             className="card bg-[#eef6ff] border-none shadow-sm rounded-2xl cursor-pointer hover:bg-[#e0efff] transition-colors"
-            onClick={() => exportToCSV(eventLogs)}
+            onClick={() => exportToCSV(logs, targetDuration, activeEventName)}
           >
             <div className="card-body p-6">
               <h2 className="text-sm font-semibold text-slate-600 mb-2">Export to <span className="font-bold">XLSX</span></h2>
@@ -195,15 +252,15 @@ const Dashboard = () => {
           <div className="card-body p-6 overflow-hidden">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-sm font-bold">Total Users</h2>
-              <input 
-                type="text" 
-                placeholder="Search ID..." 
-                className="input input-sm input-bordered w-full max-w-xs focus:outline-none" 
+              <input
+                type="text"
+                placeholder="Search ID..."
+                className="input input-sm input-bordered w-full max-w-xs focus:outline-none"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
             </div>
-            
+
             <div className="overflow-x-auto h-64 border-t border-base-200 pt-2">
               <table className="table table-sm table-pin-rows">
                 <thead>
@@ -243,8 +300,8 @@ const Dashboard = () => {
               </p>
             </div>
           </div>
-          
-          <div 
+
+          <div
             onClick={handleCopyLink}
             className={`card border-none shadow-sm rounded-2xl cursor-pointer transition-colors ${activeEventId ? 'bg-[#eef6ff] hover:bg-[#e0efff]' : 'bg-base-200 opacity-50 cursor-not-allowed'}`}
           >
@@ -266,8 +323,8 @@ const Dashboard = () => {
 
       {/* MOBILE RIGHT BACKDROP */}
       {isRightPanelOpenMobile && isMobile && (
-        <div 
-          className="fixed inset-0 bg-black/50 z-40 transition-opacity" 
+        <div
+          className="fixed inset-0 bg-black/50 z-40 transition-opacity"
           onClick={() => setIsRightPanelOpenMobile(false)}
         />
       )}
@@ -277,7 +334,7 @@ const Dashboard = () => {
         fixed lg:relative inset-y-0 right-0 z-50 bg-base-100 flex-shrink-0 transition-transform duration-300 ease-in-out h-full shadow-2xl lg:shadow-none
         ${isMobile ? (isRightPanelOpenMobile ? 'translate-x-0' : 'translate-x-full') : (isRightPanelOpenDesktop ? 'translate-x-0 flex' : 'hidden')}
       `}
-      style={{ width: isMobile ? 288 : rightPanelWidth }}
+        style={{ width: isMobile ? 288 : rightPanelWidth }}
       >
         {!isMobile && (
           <div
@@ -286,7 +343,7 @@ const Dashboard = () => {
           />
         )}
         <aside className="w-full h-full border-l border-base-200 p-6 overflow-y-auto bg-base-100 pl-8">
-          
+
           <div className="mb-10">
             <h3 className="text-sm font-semibold mb-4 text-base-content/70">Notifications</h3>
             <ul className="space-y-4">
@@ -322,8 +379,8 @@ const Dashboard = () => {
             <h3 className="text-sm font-semibold mb-4 text-base-content/70">Contacts</h3>
             <ul className="space-y-4">
               {['iss.secretary@csu.edu.ph', 'president@csu.edu.ph', 'admin@csu.edu.ph'].map((email, idx) => (
-                <li 
-                  key={idx} 
+                <li
+                  key={idx}
                   className="flex items-center gap-3 cursor-pointer hover:bg-base-200 p-2 rounded-lg transition-colors -ml-2"
                   onClick={() => handleEmailReport(email)}
                 >
@@ -337,7 +394,7 @@ const Dashboard = () => {
               ))}
             </ul>
           </div>
-          
+
         </aside>
       </div>
     </div>
