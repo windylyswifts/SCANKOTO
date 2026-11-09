@@ -1,19 +1,9 @@
-import React, { useState, useEffect } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { supabase } from '../utils/supabaseClient';
 
 const CreateEvent = () => {
   const navigate = useNavigate();
-
-  // --- Responsive & Sidebar State ---
-  const [isMobile, setIsMobile] = useState(window.innerWidth < 1024);
-  const [isLeftPanelOpen, setIsLeftPanelOpen] = useState(false);
-
-  useEffect(() => {
-    const handleResize = () => setIsMobile(window.innerWidth < 1024);
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
 
   // --- Form State ---
   const [eventName, setEventName] = useState('');
@@ -45,32 +35,44 @@ const CreateEvent = () => {
     setIsDragActive(false);
   };
 
-  // Helper: Bulletproof CSV Parser
+  // Helper: Bulletproof CSV Parser mapped to official LCO headers
   const parseCSVToStudentObjects = (text) => {
     const lines = text.split(/\r?\n/).filter(line => line.trim().length > 0);
     if (lines.length < 2) return [];
 
-    const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
+    // Clean headers by standardizing them (lowercasing, removing spaces and special characters)
+    const rawHeaders = lines[0].split(',').map(h => h.trim());
+    const cleanHeaders = rawHeaders.map(h => h.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    
     const students = [];
 
     for (let i = 1; i < lines.length; i++) {
       const cols = lines[i].split(',').map(c => c.trim());
-      if (cols.length < headers.length) continue;
+      if (cols.length < cleanHeaders.length) continue;
 
       const studentObj = {};
-      headers.forEach((header, index) => {
+      cleanHeaders.forEach((header, index) => {
         studentObj[header] = cols[index] || '';
       });
 
-      const studentId = studentObj.student_id;
+      // Map the chaotic LCO headers to our clean database columns
+      // 'idnumber' maps to the LCO 'ID NUMBER' column
+      const studentId = studentObj['idnumber'] || studentObj['studentid'] || '';
+      
+      // 'fullname' matches 'FULL NAME (Last Name, First Name, Middle Initial)' after cleaning
+      const fullName = studentObj['fullname'] || studentObj['fullname'] || studentObj['name'] || 'Unknown';
+      
+      const program = studentObj['program'] || studentObj['course'] || 'Unknown';
+      const year = studentObj['year'] || studentObj['yearlevel'] || 'N/A';
+
       if (studentId) {
         students.push({
           student_id: studentId,
-          full_name: studentObj.full_name || 'Unknown',
-          year_level: studentObj.year_level || 'N/A',
-          course: studentObj.course || 'Unknown',
-          email: studentObj.email || '',
-          qr_hash: studentObj.qr_hash || ''
+          full_name: fullName,
+          year_level: year,
+          course: program,
+          email: '', 
+          qr_hash: '' 
         });
       }
     }
@@ -137,6 +139,16 @@ const CreateEvent = () => {
 
     const eventIdSlug = eventName.trim().toLowerCase().replace(/\s+/g, '-');
 
+    // Fetch the currently authenticated user's ID
+    const { data: { session } } = await supabase.auth.getSession();
+    const userId = session?.user?.id;
+
+    if (!userId) {
+      alert("Authentication error: You must be logged in to create an event.");
+      setIsSubmitting(false);
+      return;
+    }
+
     const newEventConfig = {
       event_id: eventIdSlug,
       event_name: eventName.trim(),
@@ -145,7 +157,7 @@ const CreateEvent = () => {
       end_time: new Date(endTime).toISOString(),
       min_duration_minutes: isAttendanceRequired === 'yes' ? (renderHours * 60 + renderMinutes) : 0,
       expected_headcount: parsedStudents.length,
-      created_by: 'CSU-ISS Admin'
+      created_by: userId // Now securely tying to the Auth User
     };
 
     // 1. Upsert Event Metadata
@@ -160,7 +172,21 @@ const CreateEvent = () => {
       return;
     }
 
-    // 2. Batch Upsert Students with strict verification (.select())
+    // 2. Tie the Event to the User as 'owner' in the new event_access table
+    const { error: accessError } = await supabase
+      .from('event_access')
+      .upsert({
+         event_id: eventIdSlug,
+         user_id: userId,
+         role: 'owner'
+      }, { onConflict: 'event_id,user_id', ignoreDuplicates: true });
+
+    if (accessError) {
+      console.error("Event Access Error:", accessError);
+      alert("Event created, but failed to assign ownership: " + accessError.message);
+    }
+
+    // 3. Batch Upsert Students with strict verification (.select())
     const { data: insertedStudents, error: studentError } = await supabase
       .from('students')
       .upsert(parsedStudents, { onConflict: 'student_id' })
@@ -174,9 +200,8 @@ const CreateEvent = () => {
       return;
     }
 
-    // Strict safety check: Ensure data actually made it into the database
     if (!insertedStudents || insertedStudents.length === 0) {
-      alert("Warning: The event was created, but Supabase blocked the student upload due to a missing RLS policy. Please run the SQL command provided.");
+      alert("Warning: The event was created, but Supabase blocked the student upload due to a missing RLS policy. Please verify your SQL policies.");
       return;
     }
 
@@ -185,202 +210,146 @@ const CreateEvent = () => {
   };
 
   return (
-    <div className="flex h-screen bg-base-200 font-sans text-base-content overflow-hidden relative">
+    <main className="flex-1 overflow-y-auto p-4 md:p-8 w-full flex justify-center pb-24 bg-base-200">
       
-      {/* MOBILE BACKDROP */}
-      {isLeftPanelOpen && isMobile && (
-        <div 
-          className="fixed inset-0 bg-black/50 z-40 transition-opacity" 
-          onClick={() => setIsLeftPanelOpen(false)}
-        />
-      )}
-      
-      {/* LEFT SIDEBAR */}
-      <aside className={`
-        fixed md:relative inset-y-0 left-0 z-50 bg-base-100 border-r border-base-200 
-        flex flex-col flex-shrink-0 w-64 transition-transform duration-300 ease-in-out shadow-2xl md:shadow-none
-        ${isLeftPanelOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
-      `}>
-        <div className="p-6 flex items-center gap-3">
-          <div className="avatar placeholder">
-            <div className="bg-neutral text-neutral-content rounded-full w-8">
-              <span className="text-xs">SP</span>
+      <div className="w-full max-w-4xl space-y-6">
+        
+        <div className="mb-8">
+          <h1 className="text-3xl font-bold text-slate-800">New Event Setup</h1>
+          <p className="text-sm text-base-content/60 mt-1">Configure event parameters, scheduling, and upload the official masterlist.</p>
+        </div>
+
+        <div className="card bg-base-100 shadow-sm border border-base-200">
+          <div className="card-body p-6 md:p-10 space-y-8">
+            
+            {/* Details Section */}
+            <div className="space-y-4">
+              <input 
+                type="text" 
+                className="w-full text-4xl font-extrabold focus:outline-none bg-transparent placeholder:text-slate-300 text-slate-800 transition-colors"
+                value={eventName}
+                onChange={(e) => setEventName(e.target.value)}
+                placeholder="Event Title..."
+              />
+              <textarea 
+                className="w-full text-base focus:outline-none bg-transparent placeholder:text-slate-400 text-slate-600 resize-none h-20"
+                value={eventDescription}
+                onChange={(e) => setEventDescription(e.target.value)}
+                placeholder="Add a brief description or venue details for this event..."
+              />
             </div>
-          </div>
-          <span className="font-bold tracking-wider">SCANKOTO</span>
-        </div>
-        
-        <div className="px-4 py-2">
-          <p className="text-xs text-base-content/50 uppercase font-semibold mb-4 px-2">Dashboards</p>
-          <ul className="menu bg-base-100 w-full p-0 gap-1">
-            <li>
-              <Link to="/dashboard" className="hover:bg-base-200 rounded-xl font-medium">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 3.055A9.001 9.001 0 1020.945 13H11V3.055z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20.488 9H15V3.512A9.025 9.025 0 0120.488 9z" /></svg>
-                Overview
-              </Link>
-            </li>
-            <li>
-              <Link to="/create-event" className="active bg-base-200 text-base-content font-medium rounded-xl">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-                Create Event
-              </Link>
-            </li>
-          </ul>
-        </div>
-      </aside>
 
-      {/* MOBILE STICKY LEFT BUTTON */}
-      <button 
-        className="fixed left-0 top-1/2 -translate-y-1/2 z-30 btn btn-sm btn-primary md:hidden rounded-l-none shadow-xl opacity-90"
-        onClick={() => setIsLeftPanelOpen(true)}
-        style={{ width: '24px', padding: 0 }}
-      >
-        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M9 5l7 7-7 7" /></svg>
-      </button>
+            <div className="divider m-0"></div>
 
-      {/* MAIN CONTENT AREA */}
-      <main className="flex-1 overflow-y-auto p-4 md:p-8 w-full flex justify-center pb-24">
-        
-        <div className="w-full max-w-4xl space-y-6">
-          
-          <div className="mb-8">
-            <h1 className="text-3xl font-bold text-slate-800">New Event Setup</h1>
-            <p className="text-sm text-base-content/60 mt-1">Configure event parameters, scheduling, and upload the official masterlist.</p>
-          </div>
-
-          <div className="card bg-base-100 shadow-sm border border-base-200">
-            <div className="card-body p-6 md:p-10 space-y-8">
+            {/* Settings Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
               
-              {/* Details Section */}
-              <div className="space-y-4">
-                <input 
-                  type="text" 
-                  className="w-full text-4xl font-extrabold focus:outline-none bg-transparent placeholder:text-slate-300 text-slate-800 transition-colors"
-                  value={eventName}
-                  onChange={(e) => setEventName(e.target.value)}
-                  placeholder="Event Title..."
-                />
-                <textarea 
-                  className="w-full text-base focus:outline-none bg-transparent placeholder:text-slate-400 text-slate-600 resize-none h-20"
-                  value={eventDescription}
-                  onChange={(e) => setEventDescription(e.target.value)}
-                  placeholder="Add a brief description or venue details for this event..."
-                />
+              {/* Scheduling */}
+              <div className="space-y-6">
+                <h3 className="font-semibold text-lg text-slate-700 flex items-center gap-2">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                  Scheduling
+                </h3>
+                
+                <div className="form-control w-full">
+                  <label className="label"><span className="label-text font-medium">Starts At</span></label>
+                  <input 
+                    type="datetime-local" 
+                    className="input input-bordered w-full" 
+                    value={startTime}
+                    onChange={(e) => setStartTime(e.target.value)}
+                  />
+                </div>
+                
+                <div className="form-control w-full">
+                  <label className="label"><span className="label-text font-medium">Ends At</span></label>
+                  <input 
+                    type="datetime-local" 
+                    className="input input-bordered w-full" 
+                    value={endTime}
+                    onChange={(e) => setEndTime(e.target.value)}
+                  />
+                </div>
               </div>
 
-              <div className="divider m-0"></div>
+              {/* Requirements */}
+              <div className="space-y-6">
+                <h3 className="font-semibold text-lg text-slate-700 flex items-center gap-2">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                  Requirements
+                </h3>
 
-              {/* Settings Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                
-                {/* Scheduling */}
-                <div className="space-y-6">
-                  <h3 className="font-semibold text-lg text-slate-700 flex items-center gap-2">
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
-                    Scheduling
-                  </h3>
-                  
-                  <div className="form-control w-full">
-                    <label className="label"><span className="label-text font-medium">Starts At</span></label>
+                <div className="form-control w-full p-4 bg-base-200/50 rounded-xl border border-base-200">
+                  <label className="label cursor-pointer pb-2">
+                    <span className="label-text font-medium">Strict Attendance Required?</span> 
                     <input 
-                      type="datetime-local" 
-                      className="input input-bordered w-full" 
-                      value={startTime}
-                      onChange={(e) => setStartTime(e.target.value)}
+                      type="checkbox" 
+                      className="toggle toggle-primary" 
+                      checked={isAttendanceRequired === 'yes'}
+                      onChange={(e) => {
+                        setIsAttendanceRequired(e.target.checked ? 'yes' : 'no');
+                        if (e.target.checked) setIsModalOpen(true);
+                      }}
                     />
-                  </div>
+                  </label>
                   
-                  <div className="form-control w-full">
-                    <label className="label"><span className="label-text font-medium">Ends At</span></label>
-                    <input 
-                      type="datetime-local" 
-                      className="input input-bordered w-full" 
-                      value={endTime}
-                      onChange={(e) => setEndTime(e.target.value)}
-                    />
-                  </div>
+                  {isAttendanceRequired === 'yes' && (
+                    <div className="mt-3 flex justify-between items-center bg-base-100 p-3 rounded-lg border border-base-200 shadow-sm">
+                      <span className="text-sm">Time to render: <strong className="text-primary">{renderHours}h {renderMinutes}m</strong></span>
+                      <button className="btn btn-xs btn-ghost text-primary" onClick={() => setIsModalOpen(true)}>Edit</button>
+                    </div>
+                  )}
                 </div>
 
-                {/* Requirements */}
-                <div className="space-y-6">
-                  <h3 className="font-semibold text-lg text-slate-700 flex items-center gap-2">
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                    Requirements
-                  </h3>
-
-                  <div className="form-control w-full p-4 bg-base-200/50 rounded-xl border border-base-200">
-                    <label className="label cursor-pointer pb-2">
-                      <span className="label-text font-medium">Strict Attendance Required?</span> 
-                      <input 
-                        type="checkbox" 
-                        className="toggle toggle-primary" 
-                        checked={isAttendanceRequired === 'yes'}
-                        onChange={(e) => {
-                          setIsAttendanceRequired(e.target.checked ? 'yes' : 'no');
-                          if (e.target.checked) setIsModalOpen(true);
-                        }}
-                      />
-                    </label>
+                <div className="form-control w-full">
+                  <label className="label"><span className="label-text font-medium">Student Masterlist (.csv)</span></label>
+                  
+                  <div 
+                    className={`relative border-2 border-dashed rounded-xl p-6 flex flex-col items-center justify-center text-center transition-colors cursor-pointer
+                      ${isDragActive ? 'border-primary bg-primary/10' : 'border-base-300 bg-base-50 hover:bg-base-200/50'}
+                    `}
+                    onDragOver={handleDragOver}
+                    onDragLeave={handleDragLeave}
+                    onDrop={handleDrop}
+                  >
+                    <input 
+                      type="file" 
+                      accept=".csv"
+                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                      onChange={handleFileChange}
+                    />
                     
-                    {isAttendanceRequired === 'yes' && (
-                      <div className="mt-3 flex justify-between items-center bg-base-100 p-3 rounded-lg border border-base-200 shadow-sm">
-                        <span className="text-sm">Time to render: <strong className="text-primary">{renderHours}h {renderMinutes}m</strong></span>
-                        <button className="btn btn-xs btn-ghost text-primary" onClick={() => setIsModalOpen(true)}>Edit</button>
+                    <div className="bg-base-100 p-2 rounded-full shadow-sm border border-base-200 mb-3">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+                    </div>
+                    
+                    {masterlistFile ? (
+                      <div className="text-sm">
+                        <p className="font-semibold text-primary truncate max-w-xs">{masterlistFile.name}</p>
+                        <p className="text-xs opacity-60 mt-1">Detected count: {expectedHeadcount} students</p>
+                      </div>
+                    ) : (
+                      <div className="text-sm px-2">
+                        <span className="text-primary font-semibold">Select a .csv file</span> or drag and drop it here
                       </div>
                     )}
                   </div>
-
-                  <div className="form-control w-full">
-                    <label className="label"><span className="label-text font-medium">Student Masterlist (.csv)</span></label>
-                    
-                    <div 
-                      className={`relative border-2 border-dashed rounded-xl p-6 flex flex-col items-center justify-center text-center transition-colors cursor-pointer
-                        ${isDragActive ? 'border-primary bg-primary/10' : 'border-base-300 bg-base-50 hover:bg-base-200/50'}
-                      `}
-                      onDragOver={handleDragOver}
-                      onDragLeave={handleDragLeave}
-                      onDrop={handleDrop}
-                    >
-                      <input 
-                        type="file" 
-                        accept=".csv"
-                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                        onChange={handleFileChange}
-                      />
-                      
-                      <div className="bg-base-100 p-2 rounded-full shadow-sm border border-base-200 mb-3">
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
-                      </div>
-                      
-                      {masterlistFile ? (
-                        <div className="text-sm">
-                          <p className="font-semibold text-primary truncate max-w-xs">{masterlistFile.name}</p>
-                          <p className="text-xs opacity-60 mt-1">Detected count: {expectedHeadcount} students</p>
-                        </div>
-                      ) : (
-                        <div className="text-sm px-2">
-                          <span className="text-primary font-semibold">Select a .csv file</span> or drag and drop it here
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
                 </div>
-              </div>
 
+              </div>
             </div>
-            
-            <div className="bg-base-200/50 px-6 py-5 md:px-10 border-t border-base-200 flex justify-between items-center rounded-b-2xl">
-              <button className="btn btn-ghost text-slate-500" onClick={() => navigate('/dashboard')} disabled={isSubmitting}>Discard</button>
-              <button className="btn btn-primary px-8 shadow-sm" onClick={handleConfirmEvent} disabled={isSubmitting}>
-                {isSubmitting ? 'Syncing to Cloud...' : 'Launch Event'}
-                {!isSubmitting && <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 ml-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" /></svg>}
-              </button>
-            </div>
+
+          </div>
+          
+          <div className="bg-base-200/50 px-6 py-5 md:px-10 border-t border-base-200 flex justify-between items-center rounded-b-2xl">
+            <button className="btn btn-ghost text-slate-500" onClick={() => navigate('/dashboard')} disabled={isSubmitting}>Discard</button>
+            <button className="btn btn-primary px-8 shadow-sm" onClick={handleConfirmEvent} disabled={isSubmitting}>
+              {isSubmitting ? 'Syncing to Cloud...' : 'Launch Event'}
+              {!isSubmitting && <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 ml-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" /></svg>}
+            </button>
           </div>
         </div>
-
-      </main>
+      </div>
 
       {/* MODAL: Time to Render */}
       {isModalOpen && (
@@ -424,8 +393,7 @@ const CreateEvent = () => {
           </div>
         </div>
       )}
-
-    </div>
+    </main>
   );
 };
 

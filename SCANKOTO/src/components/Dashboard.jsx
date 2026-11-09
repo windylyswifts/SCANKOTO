@@ -1,40 +1,36 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
 import { supabase } from '../utils/supabaseClient';
 import { getAllLogs } from '../utils/db';
 import { exportToCSV } from '../utils/export';
+import { useAuth } from '../contexts/AuthContext';
 
 const Dashboard = () => {
-  const navigate = useNavigate();
-
+  const { user } = useAuth();
+  
   // --- Cloud Data State ---
   const [cloudEvents, setCloudEvents] = useState([]);
-  const [activeEvent, setActiveEvent] = useState(null); // Now stores the full Supabase object safely
+  const [activeEvent, setActiveEvent] = useState(null); 
 
   // --- Local Data State ---
   const [logs, setLogs] = useState([]);
   const [notifications, setNotifications] = useState([]);
   
-  // --- Responsive & UI State ---
-  const [isMobile, setIsMobile] = useState(window.innerWidth < 1024);
+  // --- UI State ---
   const [searchQuery, setSearchQuery] = useState('');
   const [isCopied, setIsCopied] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [rightPanelWidth, setRightPanelWidth] = useState(288);
-  
-  // --- Drawer States ---
-  const [isLeftPanelOpen, setIsLeftPanelOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 1024);
   const [isRightPanelOpenMobile, setIsRightPanelOpenMobile] = useState(false);
   const [isRightPanelOpenDesktop, setIsRightPanelOpenDesktop] = useState(true);
 
-  // Responsive listener
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < 1024);
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // 1. Fetch live events from Supabase Cloud
+  // Fetch events the logged-in user owns or has access to
   useEffect(() => {
     const loadEventsFromCloud = async () => {
       const { data, error } = await supabase
@@ -46,13 +42,12 @@ const Dashboard = () => {
         console.error("Error fetching events:", error);
       } else if (data && data.length > 0) {
         setCloudEvents(data);
-        setActiveEvent(data[0]); // Default to the newest event
+        setActiveEvent(data[0]); 
       }
     };
-    loadEventsFromCloud();
-  }, []);
+    if (user) loadEventsFromCloud();
+  }, [user]);
 
-  // 2. Load offline/local scanner logs from IndexedDB
   const loadLogs = async () => {
     try {
       const data = await getAllLogs();
@@ -102,7 +97,6 @@ const Dashboard = () => {
     };
   }, [isDragging, isMobile]);
 
-  // --- Derived Metrics (Safeguarded against null with ?.) ---
   const activeEventId = activeEvent?.event_id || '';
   const activeEventName = activeEvent?.event_name || 'Loading...';
   const expectedCount = activeEvent?.expected_headcount || 0;
@@ -115,7 +109,6 @@ const Dashboard = () => {
   
   const totalCount = eventLogs.length;
 
-  // --- Handlers ---
   const handleEmailReport = (emailAddress) => {
     const subject = encodeURIComponent(`Attendance Report: ${activeEventName}`);
     const body = encodeURIComponent(
@@ -133,60 +126,7 @@ const Dashboard = () => {
   };
 
   return (
-    <div className="flex h-screen bg-base-100 font-sans text-base-content overflow-hidden relative">
-      
-      {/* MOBILE LEFT BACKDROP */}
-      {isLeftPanelOpen && isMobile && (
-        <div 
-          className="fixed inset-0 bg-black/50 z-40 transition-opacity" 
-          onClick={() => setIsLeftPanelOpen(false)}
-        />
-      )}
-      
-      {/* LEFT SIDEBAR */}
-      <aside className={`
-        fixed md:relative inset-y-0 left-0 z-50 bg-base-100 border-r border-base-200 
-        flex flex-col flex-shrink-0 w-64 transition-transform duration-300 ease-in-out shadow-2xl md:shadow-none
-        ${isLeftPanelOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
-      `}>
-        <div className="p-6 flex items-center gap-3">
-          <div className="avatar placeholder">
-            <div className="bg-neutral text-neutral-content rounded-full w-8">
-              <span className="text-xs">SP</span>
-            </div>
-          </div>
-          <span className="font-bold tracking-wider">SCANKOTO</span>
-        </div>
-        
-        <div className="px-4 py-2">
-          <p className="text-xs text-base-content/50 uppercase font-semibold mb-4 px-2">Dashboards</p>
-          <ul className="menu bg-base-100 w-full p-0 gap-1">
-            <li>
-              <Link to="/dashboard" className="active bg-base-200 text-base-content font-medium rounded-xl">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 3.055A9.001 9.001 0 1020.945 13H11V3.055z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20.488 9H15V3.512A9.025 9.025 0 0120.488 9z" /></svg>
-                Overview
-              </Link>
-            </li>
-            <li>
-              <Link to="/create-event" className="hover:bg-base-200 rounded-xl font-medium">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-                Create Event
-              </Link>
-            </li>
-          </ul>
-        </div>
-      </aside>
-
-      {/* MOBILE STICKY LEFT BUTTON */}
-      <button 
-        className="fixed left-0 top-1/2 -translate-y-1/2 z-30 btn btn-sm btn-primary md:hidden rounded-l-none shadow-xl opacity-90"
-        onClick={() => setIsLeftPanelOpen(true)}
-        style={{ width: '24px', padding: 0 }}
-      >
-        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M9 5l7 7-7 7" /></svg>
-      </button>
-
-      {/* MAIN CONTENT AREA */}
+    <div className="flex-1 flex overflow-hidden">
       <main className="flex-1 overflow-y-auto bg-base-100 p-4 md:p-8 flex flex-col relative w-full">
         
         {/* Header */}
