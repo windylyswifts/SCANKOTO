@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Scanner } from '@yudiel/react-qr-scanner';
+import { supabase } from '../utils/supabaseClient';
 import { 
   saveAttendanceLog, 
   updateAttendanceLog, 
@@ -48,6 +49,7 @@ const AttendanceScanner = () => {
 
   const [facingMode, setFacingMode] = useState('environment');
   const [isScanning, setIsScanning] = useState(true); 
+  const [isEventEnded, setIsEventEnded] = useState(false); // NEW STATE
   const [scanResult, setScanResult] = useState(null); 
   
   const [isManualModalOpen, setIsManualModalOpen] = useState(false);
@@ -66,12 +68,9 @@ const AttendanceScanner = () => {
     try {
       const logs = await getPendingLogs();
       setPendingCount(logs.length);
-    } catch (err) {
-      console.error("Failed to refresh pending count:", err);
-    }
+    } catch (err) {}
   };
 
-  // Restored: Clean, un-debounced mount and network hooks
   useEffect(() => {
     const checkLocalCacheState = async () => {
       try {
@@ -92,7 +91,7 @@ const AttendanceScanner = () => {
       setIsSyncing(true);
       await syncPendingRecords();
       setIsSyncing(false);
-      refreshPendingCount(); // Force state update
+      refreshPendingCount(); 
     };
 
     const handleOffline = () => setNetworkStatus('offline');
@@ -102,7 +101,6 @@ const AttendanceScanner = () => {
     window.addEventListener('offline', handleOffline);
     window.addEventListener('db-updated', handleDbUpdate);
 
-    // Initial background sync attempt on startup if online
     if (navigator.onLine) {
       syncPendingRecords().then(() => refreshPendingCount());
     } else {
@@ -114,7 +112,53 @@ const AttendanceScanner = () => {
       window.removeEventListener('offline', handleOffline);
       window.removeEventListener('db-updated', handleDbUpdate);
     };
-  }, []); // Run once, no closure traps
+  }, []); 
+
+  // --- NEW: Event Termination Watcher ---
+  useEffect(() => {
+    if (activeEvent === 'unknown-event') return;
+
+    const checkEventStatus = async () => {
+      try {
+        let eventEndTime = null;
+        if (navigator.onLine) {
+          const { data, error } = await supabase.from('events').select('end_time').eq('event_id', activeEvent).single();
+          if (!error && data) eventEndTime = data.end_time;
+        } else {
+          const localEvent = await getLocalEvent(activeEvent);
+          if (localEvent) eventEndTime = localEvent.end_time;
+        }
+        
+        if (eventEndTime && new Date() > new Date(eventEndTime)) {
+          setIsEventEnded(true);
+        }
+      } catch (err) {
+        console.error("Status check failed", err);
+      }
+    };
+
+    checkEventStatus();
+
+    // Listen to real-time termination triggered by Admin Dashboard
+    if (navigator.onLine) {
+      const channel = supabase
+        .channel(`public:events:status:${activeEvent}`)
+        .on('postgres_changes', { 
+          event: 'UPDATE', 
+          schema: 'public', 
+          table: 'events', 
+          filter: `event_id=eq.${activeEvent}` 
+        }, (payload) => {
+          if (payload.new?.end_time && new Date() > new Date(payload.new.end_time)) {
+            setIsEventEnded(true);
+          }
+        })
+        .subscribe();
+
+      return () => { supabase.removeChannel(channel); };
+    }
+  }, [activeEvent, networkStatus]);
+  // --------------------------------------
 
   useEffect(() => {
     if (activeEvent !== 'unknown-event' && !eventId) {
@@ -128,10 +172,9 @@ const AttendanceScanner = () => {
       try {
         const parsed = JSON.parse(storedCooldowns);
         const now = Date.now();
-        const THROTTLE_MS = 5 * 60 * 1000; 
         const validEntries = {};
         for (const id in parsed) {
-          if (now - parsed[id] < THROTTLE_MS) {
+          if (now - parsed[id] < 300000) { // 5 mins
             validEntries[id] = parsed[id];
           }
         }
@@ -159,15 +202,16 @@ const AttendanceScanner = () => {
   };
 
   const processAttendance = async (scannedStudentId) => {
+    if (isEventEnded) return; // Hard block if ended while processing
+
     triggerBeep(); 
     setIsScanning(false);
 
     const now = Date.now();
     const studentIdClean = scannedStudentId.trim();
-    const THROTTLE_MS = 5 * 60 * 1000; 
     
     const lastScanTime = scannedIdsRef.current[studentIdClean];
-    if (lastScanTime && (now - lastScanTime < THROTTLE_MS)) {
+    if (lastScanTime && (now - lastScanTime < 300000)) {
       const formattedTime = new Date().toLocaleTimeString('en-US', { 
         hour12: true, hour: 'numeric', minute: 'numeric', second: 'numeric' 
       });
@@ -301,15 +345,13 @@ const AttendanceScanner = () => {
       };
     }
 
-    // Force count update locally first
     await refreshPendingCount();
 
-    // Trigger sync safely and wait for resolution
     if (navigator.onLine) {
       setIsSyncing(true);
       await syncPendingRecords();
       setIsSyncing(false);
-      refreshPendingCount(); // Refresh again to pick up 'synced' changes
+      refreshPendingCount(); 
     }
 
     setScanResult(resultPayload);
@@ -325,7 +367,7 @@ const AttendanceScanner = () => {
 
   const resetScanner = () => {
     setScanResult(null);
-    setIsScanning(true);
+    if (!isEventEnded) setIsScanning(true);
   };
 
   const toggleCamera = () => {
@@ -361,7 +403,7 @@ const AttendanceScanner = () => {
               onClick={toggleCamera} 
               className="btn btn-circle btn-ghost"
               title="Switch Camera"
-              disabled={!isScanning}
+              disabled={!isScanning || isEventEnded}
             >
               <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -381,15 +423,24 @@ const AttendanceScanner = () => {
             <button 
               type="button"
               onClick={handlePreCache} 
-              disabled={isCaching || networkStatus === 'offline'}
+              disabled={isCaching || networkStatus === 'offline' || isEventEnded}
               className="btn btn-xs btn-outline btn-primary"
             >
               {isCaching ? <span className="loading loading-spinner loading-xs"></span> : 'Cache Event'}
             </button>
           </div>
 
+          {/* DYNAMIC LOCK SCREEN OR SCANNER */}
           <div className="w-full aspect-square rounded-2xl overflow-hidden border-4 border-primary/20 bg-black relative shadow-inner flex items-center justify-center">
-             {isScanning ? (
+             {isEventEnded ? (
+               <div className="text-white/80 flex flex-col items-center text-center p-6">
+                 <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 mb-4 text-error" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                 </svg>
+                 <h3 className="font-bold text-xl mb-1">Event Ended</h3>
+                 <p className="text-sm opacity-70">Scanning has been disabled by the host.</p>
+               </div>
+             ) : isScanning ? (
                <Scanner
                   onScan={(detectedCodes) => {
                     let scannedText = null;
@@ -398,10 +449,7 @@ const AttendanceScanner = () => {
                     } else if (typeof detectedCodes === 'string') {
                       scannedText = detectedCodes;
                     }
-
-                    if (scannedText) {
-                      processAttendance(scannedText);
-                    }
+                    if (scannedText) processAttendance(scannedText);
                   }}
                   onError={(error) => console.error(error?.message)}
                   constraints={{ facingMode: facingMode }}
@@ -422,7 +470,7 @@ const AttendanceScanner = () => {
               type="button"
               className="btn btn-outline btn-primary w-full"
               onClick={() => setIsManualModalOpen(true)}
-              disabled={!isScanning}
+              disabled={!isScanning || isEventEnded}
             >
               <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />

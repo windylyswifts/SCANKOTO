@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../utils/supabaseClient';
-import { getPendingLogs } from '../utils/db'; // Changed to only fetch pending local logs
+import { getPendingLogs } from '../utils/db'; 
 import { exportToCSV } from '../utils/export';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -53,7 +53,6 @@ const Dashboard = () => {
     if (!activeEvent?.event_id) return;
 
     try {
-      // Fetch the Cloud Master Ledger
       const { data: cloudData, error } = await supabase
         .from('attendance_logs')
         .select('student_id, check_in_time, check_out_time, status')
@@ -61,28 +60,24 @@ const Dashboard = () => {
 
       if (error) throw error;
 
-      // Map cloud data to match our local table format
       const formattedCloudLogs = (cloudData || []).map(row => ({
-        id: `cloud-${row.student_id}`, // temporary unique ID for React keys
+        id: `cloud-${row.student_id}`, 
         studentId: row.student_id,
         timestamp: new Date(row.check_in_time).getTime(),
         syncStatus: 'synced',
         status: row.status
       }));
 
-      // Fetch Local Pending Logs (in case the current device is offline but scanning)
       const localPending = await getPendingLogs();
       const eventPending = localPending.filter(log => log.eventId === activeEvent.event_id);
 
-      // Merge Strategy: If a student exists in pending, it overrides the cloud view locally
       const pendingIds = new Set(eventPending.map(l => l.studentId));
       const finalCloudLogs = formattedCloudLogs.filter(l => !pendingIds.has(l.studentId));
 
       const merged = [...finalCloudLogs, ...eventPending];
-      merged.sort((a, b) => b.timestamp - a.timestamp); // Newest first
+      merged.sort((a, b) => b.timestamp - a.timestamp); 
 
       setLogs(prevLogs => {
-        // Notification trigger if a NEW scan came in
         if (merged.length > prevLogs.length && prevLogs.length !== 0) {
           setNotifications(prev => [
             { id: Date.now(), text: 'Live count updated from cloud', time: new Date() },
@@ -97,15 +92,12 @@ const Dashboard = () => {
     }
   };
 
-  // 3. Trigger Hybrid Fetcher when Active Event changes or local DB updates
   useEffect(() => {
     loadMergedLogs();
     window.addEventListener('db-updated', loadMergedLogs);
     return () => window.removeEventListener('db-updated', loadMergedLogs);
   }, [activeEvent]);
 
-  // 4. SUPABASE REALTIME SUBSCRIPTION
-  // Listens to the cloud database and re-fetches when another device pushes a scan
   useEffect(() => {
     if (!activeEvent?.event_id) return;
 
@@ -114,14 +106,13 @@ const Dashboard = () => {
       .on(
         'postgres_changes',
         {
-          event: '*', // Listen to INSERTs and UPDATEs
+          event: '*', 
           schema: 'public',
           table: 'attendance_logs',
           filter: `event_id=eq.${activeEvent.event_id}`
         },
         (payload) => {
-          console.log("Realtime Cloud Update Received:", payload);
-          loadMergedLogs(); // Instantly refresh the UI
+          loadMergedLogs(); 
         }
       )
       .subscribe();
@@ -131,7 +122,6 @@ const Dashboard = () => {
     };
   }, [activeEvent]);
 
-  // Right Panel Resize Logic (Desktop)
   useEffect(() => {
     const handleMouseMove = (e) => {
       if (!isDragging || isMobile) return;
@@ -155,16 +145,44 @@ const Dashboard = () => {
     };
   }, [isDragging, isMobile]);
 
+  // --- Event State Handlers ---
   const activeEventId = activeEvent?.event_id || '';
   const activeEventName = activeEvent?.event_name || 'Loading...';
   const expectedCount = activeEvent?.expected_headcount || 0;
   const targetDuration = activeEvent?.min_duration_minutes || 0;
+  
+  const isEventEnded = activeEvent?.end_time ? new Date() > new Date(activeEvent.end_time) : false;
 
   const filteredTableLogs = logs.filter(log =>
     log.studentId && log.studentId.toLowerCase().includes(searchQuery.toLowerCase())
   );
-
   const totalCount = logs.length;
+
+  const handleStopEvent = async () => {
+    if (!activeEventId || isEventEnded) return;
+    
+    const confirmStop = window.confirm(`Are you sure you want to STOP "${activeEventName}"?\n\nThis will instantly lock the event and disable all field scanners. Exporting will remain active.`);
+    if (!confirmStop) return;
+
+    const now = new Date().toISOString();
+    
+    const { error } = await supabase
+      .from('events')
+      .update({ end_time: now })
+      .eq('event_id', activeEventId);
+
+    if (error) {
+      alert("Failed to stop event: " + error.message);
+    } else {
+      setActiveEvent(prev => ({ ...prev, end_time: now }));
+      setCloudEvents(prev => prev.map(evt => evt.event_id === activeEventId ? { ...evt, end_time: now } : evt));
+      
+      setNotifications(prev => [
+        { id: Date.now(), text: `Event forcefully stopped and locked.`, time: new Date() },
+        ...prev
+      ].slice(0, 5));
+    }
+  };
 
   const handleEmailReport = (emailAddress) => {
     const subject = encodeURIComponent(`Attendance Report: ${activeEventName}`);
@@ -186,12 +204,10 @@ const Dashboard = () => {
     <div className="flex-1 flex overflow-hidden">
       <main className="flex-1 overflow-y-auto bg-base-100 p-4 md:p-8 flex flex-col relative w-full">
 
-        {/* Header */}
         <div className="flex justify-between items-center mb-8">
           <h1 className="text-2xl font-bold">Overview</h1>
           <div className="flex items-center gap-2">
 
-            {/* Dynamic Event Dropdown */}
             <div className="dropdown dropdown-end">
               <div tabIndex={0} role="button" className="btn btn-ghost btn-sm font-semibold uppercase text-xs">
                 {activeEventName} <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 ml-1 inline-block" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" /></svg>
@@ -214,7 +230,6 @@ const Dashboard = () => {
               </ul>
             </div>
 
-            {/* Right Panel Toggle Button */}
             <button
               onClick={() => {
                 if (isMobile) setIsRightPanelOpenMobile(!isRightPanelOpenMobile);
@@ -227,7 +242,6 @@ const Dashboard = () => {
           </div>
         </div>
 
-        {/* Top Cards */}
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 mb-8">
           <div className="card bg-[#f0f4ff] border-none shadow-sm rounded-2xl">
             <div className="card-body p-6">
@@ -247,7 +261,6 @@ const Dashboard = () => {
           </div>
         </div>
 
-        {/* Middle Section: Ledger Table */}
         <div className="card bg-base-50/50 border border-base-200 shadow-sm rounded-2xl mb-8 flex-shrink-0">
           <div className="card-body p-6 overflow-hidden">
             <div className="flex justify-between items-center mb-4">
@@ -290,7 +303,6 @@ const Dashboard = () => {
           </div>
         </div>
 
-        {/* Bottom Cards */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-auto">
           <div className="card bg-[#f0f4ff] border-none shadow-sm rounded-2xl">
             <div className="card-body p-6">
@@ -303,7 +315,7 @@ const Dashboard = () => {
 
           <div
             onClick={handleCopyLink}
-            className={`card border-none shadow-sm rounded-2xl cursor-pointer transition-colors ${activeEventId ? 'bg-[#eef6ff] hover:bg-[#e0efff]' : 'bg-base-200 opacity-50 cursor-not-allowed'}`}
+            className={`card border-none shadow-sm rounded-2xl transition-colors ${activeEventId && !isEventEnded ? 'bg-[#eef6ff] hover:bg-[#e0efff] cursor-pointer' : 'bg-base-200 opacity-50 cursor-not-allowed'}`}
           >
             <div className="card-body p-6 flex flex-col items-center justify-center text-center">
               <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-primary mb-1" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>
@@ -313,15 +325,20 @@ const Dashboard = () => {
             </div>
           </div>
 
-          <div className="card bg-[#ff0000] border-none shadow-sm rounded-2xl cursor-pointer hover:bg-red-700 transition-colors">
+          {/* New Dynamic Stop Event Button */}
+          <div 
+            onClick={handleStopEvent}
+            className={`card border-none shadow-sm rounded-2xl transition-colors ${isEventEnded ? 'bg-base-300 cursor-not-allowed' : 'bg-[#ff0000] hover:bg-red-700 cursor-pointer'}`}
+          >
             <div className="card-body p-6 flex items-center justify-center text-center">
-              <p className="text-xl font-bold text-white uppercase tracking-wider">Stop Event</p>
+              <p className={`text-xl font-bold uppercase tracking-wider ${isEventEnded ? 'text-base-content/50' : 'text-white'}`}>
+                {isEventEnded ? 'Event Ended' : 'Stop Event'}
+              </p>
             </div>
           </div>
         </div>
       </main>
 
-      {/* MOBILE RIGHT BACKDROP */}
       {isRightPanelOpenMobile && isMobile && (
         <div
           className="fixed inset-0 bg-black/50 z-40 transition-opacity"
@@ -329,7 +346,6 @@ const Dashboard = () => {
         />
       )}
 
-      {/* RIGHT SIDEBAR */}
       <div className={`
         fixed lg:relative inset-y-0 right-0 z-50 bg-base-100 flex-shrink-0 transition-transform duration-300 ease-in-out h-full shadow-2xl lg:shadow-none
         ${isMobile ? (isRightPanelOpenMobile ? 'translate-x-0' : 'translate-x-full') : (isRightPanelOpenDesktop ? 'translate-x-0 flex' : 'hidden')}
