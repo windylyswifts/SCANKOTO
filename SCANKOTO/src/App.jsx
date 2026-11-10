@@ -7,6 +7,7 @@ import Login from './components/Login';
 import AttendanceScanner from './components/AttendanceScanner';
 import Dashboard from './components/Dashboard';
 import CreateEvent from './components/CreateEvent';
+import StudentPortal from './components/StudentPortal'; // NEW IMPORT
 
 function App() {
   return (
@@ -15,8 +16,9 @@ function App() {
         <Routes>
           <Route path="/login" element={<Login />} />
           
-          {/* Public Scanner Route: Accessible directly via event link without login */}
+          {/* Public Routes: Accessible without login */}
           <Route path="/scan/:eventId" element={<AttendanceScanner />} />
+          <Route path="/portal/:eventId" element={<StudentPortal />} />
           
           {/* Protected Admin Routes */}
           <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>

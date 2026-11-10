@@ -18,6 +18,7 @@ const Dashboard = () => {
   // --- UI State ---
   const [searchQuery, setSearchQuery] = useState('');
   const [isCopied, setIsCopied] = useState(false);
+  const [isPortalCopied, setIsPortalCopied] = useState(false); // NEW STATE
   const [isDragging, setIsDragging] = useState(false);
   const [rightPanelWidth, setRightPanelWidth] = useState(288);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 1024);
@@ -200,6 +201,15 @@ const Dashboard = () => {
     setTimeout(() => setIsCopied(false), 2000);
   };
 
+  // --- NEW: Copy Student Portal Link ---
+  const handleCopyPortalLink = () => {
+    if (!activeEventId) return;
+    const url = `${window.location.origin}/portal/${activeEventId}`;
+    navigator.clipboard.writeText(url);
+    setIsPortalCopied(true);
+    setTimeout(() => setIsPortalCopied(false), 2000);
+  };
+
   return (
     <div className="flex-1 flex overflow-hidden">
       <main className="flex-1 overflow-y-auto bg-base-100 p-4 md:p-8 flex flex-col relative w-full">
@@ -242,11 +252,25 @@ const Dashboard = () => {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 mb-8">
+        {/* UPDATED GRID: 3 Columns instead of 2 */}
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 mb-8">
           <div className="card bg-[#f0f4ff] border-none shadow-sm rounded-2xl">
             <div className="card-body p-6">
               <h2 className="text-sm font-semibold text-slate-600 mb-2">Live Count</h2>
               <p className="text-4xl font-bold text-slate-800">{totalCount}<span className="text-2xl text-slate-400">/{expectedCount}</span></p>
+            </div>
+          </div>
+
+          {/* NEW: Student Portal Copy Button */}
+          <div
+            className={`card border-none shadow-sm rounded-2xl transition-colors ${activeEventId ? 'bg-[#fcf0ff] hover:bg-[#f3d9ff] cursor-pointer' : 'bg-base-200 opacity-50 cursor-not-allowed'}`}
+            onClick={handleCopyPortalLink}
+          >
+            <div className="card-body p-6 flex flex-col justify-center">
+              <h2 className="text-sm font-semibold text-slate-600 mb-2">
+                {isPortalCopied ? <span className="text-primary font-bold">Link Copied!</span> : 'Student Portal'}
+              </h2>
+              <p className="text-slate-500 text-sm">Copy link for students' rendered hours</p>
             </div>
           </div>
 
@@ -325,7 +349,6 @@ const Dashboard = () => {
             </div>
           </div>
 
-          {/* New Dynamic Stop Event Button */}
           <div 
             onClick={handleStopEvent}
             className={`card border-none shadow-sm rounded-2xl transition-colors ${isEventEnded ? 'bg-base-300 cursor-not-allowed' : 'bg-[#ff0000] hover:bg-red-700 cursor-pointer'}`}
