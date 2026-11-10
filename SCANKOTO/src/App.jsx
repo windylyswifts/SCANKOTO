@@ -15,16 +15,16 @@ function App() {
         <Routes>
           <Route path="/login" element={<Login />} />
           
-          {/* Scanner Route - Must remain protected so users cannot spoof attendance data */}
-          <Route path="/scan/:eventId" element={<ProtectedRoute><AttendanceScanner /></ProtectedRoute>} />
+          {/* Public Scanner Route: Accessible directly via event link without login */}
+          <Route path="/scan/:eventId" element={<AttendanceScanner />} />
           
-          {/* Protected Admin Routes mapped inside the Unified Layout */}
+          {/* Protected Admin Routes */}
           <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/create-event" element={<CreateEvent />} />
           </Route>
           
-          {/* Default fallback */}
+          {/* Default fallback to dashboard (which redirects unauthenticated users to login) */}
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </Router>
