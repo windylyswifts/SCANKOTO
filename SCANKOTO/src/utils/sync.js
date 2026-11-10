@@ -5,21 +5,7 @@ export const syncPendingRecords = async () => {
   if (!navigator.onLine) return false;
 
   try {
-    // ---------------------------------------------------------
-    // 1. PRODUCTION AUTH GUARD: Verify/Refresh Session
-    // Prevents data loss if the token expired while scanning offline
-    // ---------------------------------------------------------
-    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-    
-    if (sessionError || !session) {
-      console.warn("[Sync Engine] Session expired or invalid. Halting sync to protect local data.");
-      window.dispatchEvent(new CustomEvent('sync-status', { 
-        detail: { isSyncing: false, success: false, authExpired: true } 
-      }));
-      return false; // Safely aborts; logs remain pending in IndexedDB
-    }
-
-    // 2. Fetch pending logs
+    // 1. Fetch pending logs
     const pendingLogs = await getPendingLogs();
     if (pendingLogs.length === 0) return true; 
 
@@ -31,20 +17,8 @@ export const syncPendingRecords = async () => {
       try {
         console.log(`[Sync Engine] Attempting to sync ID: ${local.studentId}`);
         const isAnomaly = local.status && local.status.includes('Anomaly');
-
-        // 3. SAFETY NET: Ensure Event exists in cloud to prevent Foreign Key crashes
-        const localEvent = await getLocalEvent(local.eventId);
-        if (localEvent) {
-           const { error: evtErr } = await supabase.from('events').upsert([{
-              event_id: localEvent.event_id,
-              event_name: localEvent.event_name || 'Unknown Event',
-              start_time: localEvent.start_time || new Date().toISOString(),
-              end_time: localEvent.end_time || new Date().toISOString()
-           }], { onConflict: 'event_id', ignoreDuplicates: true });
-           if (evtErr) console.error("[Sync Engine] Event Injection Failed:", evtErr);
-        }
         
-        // 4. SAFETY NET: Inject student/anomaly into the 'students' table first
+        // 2. SAFETY NET: Inject student/anomaly into the 'students' table first
         const { error: studentErr } = await supabase
           .from('students')
           .upsert([{
@@ -61,7 +35,7 @@ export const syncPendingRecords = async () => {
             throw studentErr; 
         }
 
-        // 5. LOG ANOMALY TO DEDICATED TABLE
+        // 3. LOG ANOMALY TO DEDICATED TABLE
         if (isAnomaly) {
           const { error: anomalyErr } = await supabase.from('anomalies').upsert(
             { 
@@ -74,7 +48,7 @@ export const syncPendingRecords = async () => {
           if (anomalyErr) console.error("[Sync Engine] Anomalies DB Rejection:", anomalyErr);
         }
 
-        // 6. FETCH AND UPSERT ATTENDANCE LOG
+        // 4. FETCH AND UPSERT ATTENDANCE LOG
         const { data: cloudRecords, error: fetchErr } = await supabase
           .from('attendance_logs')
           .select('record_id, check_in_time, check_out_time, status')
@@ -113,7 +87,7 @@ export const syncPendingRecords = async () => {
           if (insertErr) throw insertErr;
         }
 
-        // 7. MARK LOCAL LOG AS SYNCED (Only executes if everything above passed)
+        // 5. MARK LOCAL LOG AS SYNCED (Only executes if everything above passed)
         await updateLocalLogSyncStatus(local.id, 'synced');
         successCount++;
         console.log(`[Sync Engine] Successfully synced ID: ${local.studentId}`);
@@ -123,7 +97,7 @@ export const syncPendingRecords = async () => {
       }
     }
 
-    // 8. UI REFRESH
+    // 6. UI REFRESH
     window.dispatchEvent(new CustomEvent('sync-status', { detail: { isSyncing: false, success: successCount > 0 } }));
     window.dispatchEvent(new Event('db-updated'));
     
