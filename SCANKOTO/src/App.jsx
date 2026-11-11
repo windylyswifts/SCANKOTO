@@ -7,7 +7,8 @@ import Login from './components/Login';
 import AttendanceScanner from './components/AttendanceScanner';
 import Dashboard from './components/Dashboard';
 import CreateEvent from './components/CreateEvent';
-import StudentPortal from './components/StudentPortal'; // NEW IMPORT
+import StudentPortal from './components/StudentPortal';
+import ManageEvents from './components/ManageEvents'; // NEW IMPORT
 
 function App() {
   return (
@@ -24,9 +25,10 @@ function App() {
           <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/create-event" element={<CreateEvent />} />
+            <Route path="/manage-events" element={<ManageEvents />} /> {/* NEW ROUTE */}
           </Route>
           
-          {/* Default fallback to dashboard (which redirects unauthenticated users to login) */}
+          {/* Default fallback to dashboard */}
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </Router>
