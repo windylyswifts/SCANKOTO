@@ -30,7 +30,7 @@ const Layout = () => {
           <span className="font-bold tracking-wider">SCANKOTO</span>
         </div>
         
-        <div className="px-4 py-2 flex-1">
+        <div className="px-4 py-2 flex-1 overflow-y-auto">
           <p className="text-xs text-base-content/50 uppercase font-semibold mb-4 px-2">Dashboards</p>
           <ul className="menu bg-base-100 w-full p-0 gap-1">
             <li>
@@ -49,6 +49,12 @@ const Layout = () => {
               <Link to="/manage-events" onClick={closeSidebar} className={`rounded-xl font-medium ${location.pathname === '/manage-events' ? 'active bg-base-200 text-base-content' : 'hover:bg-base-200'}`}>
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                 Manage Events
+              </Link>
+            </li>
+            <li>
+              <Link to="/archived-events" onClick={closeSidebar} className={`rounded-xl font-medium ${location.pathname === '/archived-events' ? 'active bg-base-200 text-base-content' : 'hover:bg-base-200'}`}>
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" /></svg>
+                Archived
               </Link>
             </li>
           </ul>

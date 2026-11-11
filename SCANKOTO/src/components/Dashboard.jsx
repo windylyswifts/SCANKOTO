@@ -31,7 +31,7 @@ const Dashboard = () => {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // 1. Fetch accessible events on mount
+  // 1. Fetch accessible events on mount (Exclude Archived)
   useEffect(() => {
     const loadEventsFromCloud = async () => {
       const { data, error } = await supabase
@@ -42,8 +42,9 @@ const Dashboard = () => {
       if (error) {
         console.error("Error fetching events:", error);
       } else if (data && data.length > 0) {
-        setCloudEvents(data);
-        setActiveEvent(data[0]);
+        const activeOnly = data.filter(evt => evt.is_archived !== true);
+        setCloudEvents(activeOnly);
+        if (activeOnly.length > 0) setActiveEvent(activeOnly[0]);
       }
     };
     if (user) loadEventsFromCloud();

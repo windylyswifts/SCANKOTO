@@ -8,7 +8,8 @@ import AttendanceScanner from './components/AttendanceScanner';
 import Dashboard from './components/Dashboard';
 import CreateEvent from './components/CreateEvent';
 import StudentPortal from './components/StudentPortal';
-import ManageEvents from './components/ManageEvents'; // NEW IMPORT
+import ManageEvents from './components/ManageEvents';
+import ArchivedEvents from './components/ArchivedEvents'; // NEW IMPORT
 
 function App() {
   return (
@@ -17,18 +18,16 @@ function App() {
         <Routes>
           <Route path="/login" element={<Login />} />
           
-          {/* Public Routes: Accessible without login */}
           <Route path="/scan/:eventId" element={<AttendanceScanner />} />
           <Route path="/portal/:eventId" element={<StudentPortal />} />
           
-          {/* Protected Admin Routes */}
           <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/create-event" element={<CreateEvent />} />
-            <Route path="/manage-events" element={<ManageEvents />} /> {/* NEW ROUTE */}
+            <Route path="/manage-events" element={<ManageEvents />} />
+            <Route path="/archived-events" element={<ArchivedEvents />} /> {/* NEW ROUTE */}
           </Route>
           
-          {/* Default fallback to dashboard */}
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </Router>
