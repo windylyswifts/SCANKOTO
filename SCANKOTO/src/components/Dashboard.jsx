@@ -18,7 +18,7 @@ const Dashboard = () => {
   // --- UI State ---
   const [searchQuery, setSearchQuery] = useState('');
   const [isCopied, setIsCopied] = useState(false);
-  const [isPortalCopied, setIsPortalCopied] = useState(false); // NEW STATE
+  const [isPortalCopied, setIsPortalCopied] = useState(false); 
   const [isDragging, setIsDragging] = useState(false);
   const [rightPanelWidth, setRightPanelWidth] = useState(288);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 1024);
@@ -159,6 +159,23 @@ const Dashboard = () => {
   );
   const totalCount = logs.length;
 
+  // --- NEW: Unified Event Selection Handler ---
+  const handleEventSelection = (selectedEvent) => {
+    if (activeEventId === selectedEvent.event_id) return;
+    
+    // Set as active
+    setActiveEvent(selectedEvent);
+    
+    // Reorder the array to bump the selected event to the very top
+    setCloudEvents(prev => {
+      const filtered = prev.filter(evt => evt.event_id !== selectedEvent.event_id);
+      return [selectedEvent, ...filtered];
+    });
+
+    // Auto-close panel on mobile for better UX
+    if (isMobile) setIsRightPanelOpenMobile(false);
+  };
+
   const handleStopEvent = async () => {
     if (!activeEventId || isEventEnded) return;
     
@@ -201,7 +218,6 @@ const Dashboard = () => {
     setTimeout(() => setIsCopied(false), 2000);
   };
 
-  // --- NEW: Copy Student Portal Link ---
   const handleCopyPortalLink = () => {
     if (!activeEventId) return;
     const url = `${window.location.origin}/portal/${activeEventId}`;
@@ -229,7 +245,7 @@ const Dashboard = () => {
                   cloudEvents.map(evt => (
                     <li key={evt.event_id}>
                       <a
-                        onClick={() => setActiveEvent(evt)}
+                        onClick={() => handleEventSelection(evt)} // Hooked up the new handler
                         className={activeEventId === evt.event_id ? "active" : ""}
                       >
                         {evt.event_name}
@@ -252,7 +268,6 @@ const Dashboard = () => {
           </div>
         </div>
 
-        {/* UPDATED GRID: 3 Columns instead of 2 */}
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 mb-8">
           <div className="card bg-[#f0f4ff] border-none shadow-sm rounded-2xl">
             <div className="card-body p-6">
@@ -261,7 +276,6 @@ const Dashboard = () => {
             </div>
           </div>
 
-          {/* NEW: Student Portal Copy Button */}
           <div
             className={`card border-none shadow-sm rounded-2xl transition-colors ${activeEventId ? 'bg-[#fcf0ff] hover:bg-[#f3d9ff] cursor-pointer' : 'bg-base-200 opacity-50 cursor-not-allowed'}`}
             onClick={handleCopyPortalLink}
@@ -407,7 +421,11 @@ const Dashboard = () => {
             <h3 className="text-sm font-semibold mb-4 text-base-content/70">Activities</h3>
             <ul className="space-y-4">
               {cloudEvents.map(evt => (
-                <li key={evt.event_id} className={`text-sm font-medium ${activeEventId === evt.event_id ? 'text-primary' : ''}`}>
+                <li 
+                  key={evt.event_id} 
+                  className={`text-sm font-medium cursor-pointer transition-colors hover:text-primary ${activeEventId === evt.event_id ? 'text-primary' : 'text-base-content/80'}`}
+                  onClick={() => handleEventSelection(evt)} // Hooked up the new handler
+                >
                   {evt.event_name}
                 </li>
               ))}
