@@ -35,21 +35,30 @@ const ManageEvents = () => {
 
     if (!confirmDelete) return;
 
-    // 1. Delete from Supabase (Cascade will handle logs/anomalies automatically)
-    const { error } = await supabase
+    // 1. Delete from Supabase AND append .select() to verify the row was actually removed
+    const { data, error } = await supabase
       .from('events')
       .delete()
-      .eq('event_id', eventId);
+      .eq('event_id', eventId)
+      .select();
 
+    // 2. Server or Network Error
     if (error) {
       alert("Failed to delete event: " + error.message);
       return;
     }
 
-    // 2. Remove from Local UI State
+    // 3. RLS Block (The Ghost Delete Fix)
+    // If data is empty, the SQL server refused to delete it due to missing permissions
+    if (!data || data.length === 0) {
+      alert("Action Denied: You do not have permission to delete this event, or it has already been removed.");
+      return;
+    }
+
+    // 4. Safe to remove from Local UI State
     setEvents(prev => prev.filter(e => e.event_id !== eventId));
 
-    // 3. Clean up IndexedDB locally to free up storage
+    // 5. Clean up IndexedDB locally to free up storage
     try {
       const db = await initDB();
       const tx = db.transaction('events', 'readwrite');
@@ -58,7 +67,7 @@ const ManageEvents = () => {
       console.warn("Could not clear local indexedDB cache for event.", err);
     }
 
-    // 4. Clean up LocalStorage active event if it was the one deleted
+    // 6. Clean up LocalStorage active event if it was the one deleted
     if (localStorage.getItem('scankoto_active_event') === eventId) {
       localStorage.removeItem('scankoto_active_event');
     }
