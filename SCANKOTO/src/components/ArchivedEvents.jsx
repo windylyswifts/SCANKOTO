@@ -26,11 +26,25 @@ const ArchivedEvents = () => {
   }, [user]);
 
   const handleUnarchive = async (eventId) => {
-    const { error } = await supabase.from('events').update({ is_archived: false }).eq('event_id', eventId);
-    if (!error) {
-      setEvents(prev => prev.filter(e => e.event_id !== eventId));
-      setSelectedEvent(null);
+    // Added .select() to catch silent RLS blocks
+    const { data, error } = await supabase
+      .from('events')
+      .update({ is_archived: false })
+      .eq('event_id', eventId)
+      .select();
+      
+    if (error) {
+      alert("Failed to unarchive event: " + error.message);
+      return;
     }
+    
+    if (!data || data.length === 0) {
+      alert("Action Denied: You do not have permission to modify this event.");
+      return;
+    }
+
+    setEvents(prev => prev.filter(e => e.event_id !== eventId));
+    setSelectedEvent(null);
   };
 
   const handleDelete = async (eventId) => {
