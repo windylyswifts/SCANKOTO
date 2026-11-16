@@ -1,8 +1,8 @@
 import { supabase } from './supabaseClient';
 
 const DB_NAME = 'ScankotoDB';
-const DB_VERSION = 2; 
-const STORE_NAME = 'attendanceLogs'; 
+const DB_VERSION = 2;
+const STORE_NAME = 'attendanceLogs';
 
 export const initDB = () => {
   return new Promise((resolve, reject) => {
@@ -10,7 +10,7 @@ export const initDB = () => {
 
     request.onupgradeneeded = (event) => {
       const db = event.target.result;
-      
+
       if (!db.objectStoreNames.contains(STORE_NAME)) {
         const store = db.createObjectStore(STORE_NAME, { keyPath: 'id', autoIncrement: true });
         store.createIndex('studentId', 'studentId', { unique: false });
@@ -36,14 +36,17 @@ export const saveAttendanceLog = async (logData) => {
   return new Promise((resolve, reject) => {
     const transaction = db.transaction([STORE_NAME], 'readwrite');
     const store = transaction.objectStore(STORE_NAME);
-    
+
     const request = store.add({
       ...logData,
-      syncStatus: 'pending',
+      syncStatus: logData.syncStatus || 'pending',
       savedAt: Date.now()
     });
 
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      window.dispatchEvent(new Event('db-updated'));
+      resolve(request.result);
+    };
     request.onerror = (event) => reject(event.target.error);
   });
 };
@@ -53,10 +56,16 @@ export const updateAttendanceLog = async (logData) => {
   return new Promise((resolve, reject) => {
     const transaction = db.transaction([STORE_NAME], 'readwrite');
     const store = transaction.objectStore(STORE_NAME);
-    
-    const request = store.put(logData);
 
-    request.onsuccess = () => resolve(request.result);
+    const request = store.put({
+      ...logData,
+      updatedAt: Date.now()
+    });
+
+    request.onsuccess = () => {
+      window.dispatchEvent(new Event('db-updated'));
+      resolve(request.result);
+    };
     request.onerror = (event) => reject(event.target.error);
   });
 };
@@ -69,7 +78,7 @@ export const getPendingLogs = async () => {
     const request = store.getAll();
 
     request.onsuccess = () => {
-      const pending = (request.result || []).filter(log => log.syncStatus === 'pending');
+      const pending = (request.result || []).filter((log) => log.syncStatus === 'pending');
       resolve(pending);
     };
     request.onerror = (event) => reject(event.target.error);
@@ -105,18 +114,17 @@ export const updateLocalLogSyncStatus = async (id, newStatus) => {
   return new Promise((resolve, reject) => {
     const transaction = db.transaction([STORE_NAME], 'readwrite');
     const store = transaction.objectStore(STORE_NAME);
-    
+
     const getRequest = store.get(id);
-    
+
     getRequest.onsuccess = () => {
       const record = getRequest.result;
       if (record) {
         record.syncStatus = newStatus;
         const putRequest = store.put(record);
-        
+
         putRequest.onsuccess = () => {
-          // CRITICAL: Forces React to re-fetch the database live
-          window.dispatchEvent(new Event('db-updated')); 
+          window.dispatchEvent(new Event('db-updated'));
           resolve(true);
         };
         putRequest.onerror = (e) => reject(e.target.error);
@@ -145,7 +153,7 @@ export const cacheEventData = async (eventId) => {
     if (studentError) throw studentError;
 
     const db = await initDB();
-    
+
     await new Promise((resolve, reject) => {
       const tx = db.transaction('events', 'readwrite');
       tx.objectStore('events').put(eventData);
@@ -156,13 +164,12 @@ export const cacheEventData = async (eventId) => {
     await new Promise((resolve, reject) => {
       const tx = db.transaction('students', 'readwrite');
       const store = tx.objectStore('students');
-      studentsData.forEach(student => store.put(student));
+      (studentsData || []).forEach((student) => store.put(student));
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     });
 
-    return { success: true, count: studentsData.length };
-    
+    return { success: true, count: (studentsData || []).length, event: eventData };
   } catch (error) {
     return { success: false, error };
   }
@@ -190,5 +197,14 @@ export const getLocalStudent = async (studentId) => {
 
 export const getStudentAttendanceRecord = async (eventId, studentId) => {
   const logs = await getAllLogs();
-  return logs.find(log => log.eventId === eventId && log.studentId === studentId);
+  const matches = logs.filter((log) => log.eventId === eventId && log.studentId === studentId);
+  if (matches.length === 0) return undefined;
+
+  // Prefer the record that already has a checkOutTime or is most recently updated
+  return matches.sort((a, b) => {
+    if (Boolean(b.checkOutTime) !== Boolean(a.checkOutTime)) {
+      return b.checkOutTime ? 1 : -1;
+    }
+    return (b.updatedAt || b.savedAt || 0) - (a.updatedAt || a.savedAt || 0);
+  })[0];
 };
