@@ -2,17 +2,19 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Scanner } from '@yudiel/react-qr-scanner';
 import { supabase } from '../utils/supabaseClient';
-import { 
-  saveAttendanceLog, 
-  updateAttendanceLog, 
-  getPendingLogs, 
-  getAllLogs, 
-  cacheEventData, 
-  getLocalEvent, 
+import {
+  saveAttendanceLog,
+  updateAttendanceLog,
+  getPendingLogs,
+  getStudentAttendanceRecord,
+  cacheEventData,
+  getLocalEvent,
   getLocalStudent,
   initDB
-} from '../utils/db'; 
-import { syncPendingRecords } from '../utils/sync'; 
+} from '../utils/db';
+import { syncPendingRecords } from '../utils/sync';
+
+const COOLDOWN_MS = 300000; // 5 minutes
 
 const triggerBeep = () => {
   try {
@@ -22,23 +24,23 @@ const triggerBeep = () => {
     const gainNode = ctx.createGain();
 
     oscillator.type = 'sine';
-    oscillator.frequency.setValueAtTime(880, ctx.currentTime); 
-    gainNode.gain.setValueAtTime(0.5, ctx.currentTime); 
+    oscillator.frequency.setValueAtTime(880, ctx.currentTime);
+    gainNode.gain.setValueAtTime(0.5, ctx.currentTime);
 
     oscillator.connect(gainNode);
     gainNode.connect(ctx.destination);
 
     oscillator.start();
-    oscillator.stop(ctx.currentTime + 0.15); 
+    oscillator.stop(ctx.currentTime + 0.15);
   } catch (error) {
-    console.error("Native audio failed to play:", error);
+    console.error('Native audio failed to play:', error);
   }
 };
 
 const AttendanceScanner = () => {
   const { eventId } = useParams();
   const navigate = useNavigate();
-  
+
   const [activeEvent, setActiveEvent] = useState(() => {
     if (eventId) {
       localStorage.setItem('scankoto_active_event', eventId);
@@ -48,21 +50,22 @@ const AttendanceScanner = () => {
   });
 
   const [facingMode, setFacingMode] = useState('environment');
-  const [isScanning, setIsScanning] = useState(true); 
-  const [isEventEnded, setIsEventEnded] = useState(false); // NEW STATE
-  const [scanResult, setScanResult] = useState(null); 
-  
+  const [isScanning, setIsScanning] = useState(true);
+  const [isEventEnded, setIsEventEnded] = useState(false);
+  const [scanResult, setScanResult] = useState(null);
+
   const [isManualModalOpen, setIsManualModalOpen] = useState(false);
   const [manualId, setManualId] = useState('');
-  
+
   const [networkStatus, setNetworkStatus] = useState(navigator.onLine ? 'online' : 'offline');
   const [pendingCount, setPendingCount] = useState(0);
   const [isSyncing, setIsSyncing] = useState(false);
-  
+
   const [isCaching, setIsCaching] = useState(false);
   const [cachedStudentCount, setCachedStudentCount] = useState(null);
 
   const scannedIdsRef = useRef({});
+  const isProcessingRef = useRef(false);
 
   const refreshPendingCount = async () => {
     try {
@@ -86,12 +89,19 @@ const AttendanceScanner = () => {
     };
     checkLocalCacheState();
 
+    // Auto-warm event & student cache in background when online
+    if (navigator.onLine && activeEvent !== 'unknown-event') {
+      cacheEventData(activeEvent).then((res) => {
+        if (res.success) setCachedStudentCount(res.count);
+      });
+    }
+
     const handleOnline = async () => {
       setNetworkStatus('online');
       setIsSyncing(true);
       await syncPendingRecords();
       setIsSyncing(false);
-      refreshPendingCount(); 
+      refreshPendingCount();
     };
 
     const handleOffline = () => setNetworkStatus('offline');
@@ -112,9 +122,9 @@ const AttendanceScanner = () => {
       window.removeEventListener('offline', handleOffline);
       window.removeEventListener('db-updated', handleDbUpdate);
     };
-  }, []); 
+  }, [activeEvent]);
 
-  // --- NEW: Event Termination Watcher ---
+  // Event Termination Watcher
   useEffect(() => {
     if (activeEvent === 'unknown-event') return;
 
@@ -122,43 +132,51 @@ const AttendanceScanner = () => {
       try {
         let eventEndTime = null;
         if (navigator.onLine) {
-          const { data, error } = await supabase.from('events').select('end_time').eq('event_id', activeEvent).single();
+          const { data, error } = await supabase
+            .from('events')
+            .select('end_time')
+            .eq('event_id', activeEvent)
+            .single();
           if (!error && data) eventEndTime = data.end_time;
         } else {
           const localEvent = await getLocalEvent(activeEvent);
           if (localEvent) eventEndTime = localEvent.end_time;
         }
-        
+
         if (eventEndTime && new Date() > new Date(eventEndTime)) {
           setIsEventEnded(true);
         }
       } catch (err) {
-        console.error("Status check failed", err);
+        console.error('Status check failed', err);
       }
     };
 
     checkEventStatus();
 
-    // Listen to real-time termination triggered by Admin Dashboard
     if (navigator.onLine) {
       const channel = supabase
         .channel(`public:events:status:${activeEvent}`)
-        .on('postgres_changes', { 
-          event: 'UPDATE', 
-          schema: 'public', 
-          table: 'events', 
-          filter: `event_id=eq.${activeEvent}` 
-        }, (payload) => {
-          if (payload.new?.end_time && new Date() > new Date(payload.new.end_time)) {
-            setIsEventEnded(true);
+        .on(
+          'postgres_changes',
+          {
+            event: 'UPDATE',
+            schema: 'public',
+            table: 'events',
+            filter: `event_id=eq.${activeEvent}`
+          },
+          (payload) => {
+            if (payload.new?.end_time && new Date() > new Date(payload.new.end_time)) {
+              setIsEventEnded(true);
+            }
           }
-        })
+        )
         .subscribe();
 
-      return () => { supabase.removeChannel(channel); };
+      return () => {
+        supabase.removeChannel(channel);
+      };
     }
   }, [activeEvent, networkStatus]);
-  // --------------------------------------
 
   useEffect(() => {
     if (activeEvent !== 'unknown-event' && !eventId) {
@@ -174,7 +192,7 @@ const AttendanceScanner = () => {
         const now = Date.now();
         const validEntries = {};
         for (const id in parsed) {
-          if (now - parsed[id] < 300000) { // 5 mins
+          if (now - parsed[id] < COOLDOWN_MS) {
             validEntries[id] = parsed[id];
           }
         }
@@ -186,7 +204,7 @@ const AttendanceScanner = () => {
 
   const handlePreCache = async () => {
     if (!navigator.onLine) {
-      alert("An active internet connection is required to download event data for offline mode.");
+      alert('An active internet connection is required to download event data for offline mode.');
       return;
     }
     setIsCaching(true);
@@ -201,162 +219,224 @@ const AttendanceScanner = () => {
     }
   };
 
-  const processAttendance = async (scannedStudentId) => {
-    if (isEventEnded) return; // Hard block if ended while processing
-
-    triggerBeep(); 
-    setIsScanning(false);
-
-    const now = Date.now();
-    const studentIdClean = scannedStudentId.trim();
-    
-    const lastScanTime = scannedIdsRef.current[studentIdClean];
-    if (lastScanTime && (now - lastScanTime < 300000)) {
-      const formattedTime = new Date().toLocaleTimeString('en-US', { 
-        hour12: true, hour: 'numeric', minute: 'numeric', second: 'numeric' 
-      });
-
-      setScanResult({
-        type: 'Throttled',
-        studentId: studentIdClean,
-        studentName: 'N/A',
-        timestamp: formattedTime,
-        isDuplicate: true,
-        message: 'Scan throttled. Please wait 5 minutes between scans.'
-      });
-      setIsManualModalOpen(false); 
-      setManualId(''); 
-      return;
-    }
-
-    scannedIdsRef.current[studentIdClean] = now;
-    localStorage.setItem('scankoto_cooldowns', JSON.stringify(scannedIdsRef.current));
-
-    let studentName = 'Unknown Student';
-    let isAnomaly = true; 
+  const resolveStudentInfo = async (studentIdClean) => {
     try {
       const localStudent = await getLocalStudent(studentIdClean);
-      if (localStudent?.full_name) {
-        studentName = localStudent.full_name;
-        isAnomaly = false;
+      if (localStudent?.full_name && localStudent.qr_hash !== 'anomaly') {
+        return { studentName: localStudent.full_name, isAnomaly: false };
       }
-    } catch (err) {}
 
-    let existingLogs = [];
-    try {
-      existingLogs = await getAllLogs();
-    } catch (err) {}
+      if (navigator.onLine) {
+        const { data } = await supabase
+          .from('students')
+          .select('full_name, qr_hash')
+          .eq('student_id', studentIdClean)
+          .maybeSingle();
 
-    const existingLog = existingLogs.find(
-      log => log.eventId === activeEvent && log.studentId === studentIdClean
-    );
-
-    let resultPayload = {};
-    const formattedTime = new Date(now).toLocaleTimeString('en-US', { hour12: true, hour: 'numeric', minute: 'numeric' });
-
-    if (!existingLog) {
-      const initialStatus = isAnomaly ? 'Anomaly / Not on Masterlist' : 'Checked-In';
-      const newLog = {
-        studentId: studentIdClean,
-        studentName,
-        eventId: activeEvent,
-        timestamp: now,
-        checkInTime: now,
-        checkOutTime: null,
-        status: initialStatus,
-        syncStatus: 'pending'
-      };
-
-      await saveAttendanceLog(newLog);
-
-      resultPayload = {
-        type: 'Check-In',
-        studentId: studentIdClean,
-        studentName,
-        timestamp: formattedTime,
-        status: initialStatus,
-        badgeColor: isAnomaly ? 'bg-error/20 text-error' : 'bg-info/20 text-info',
-        message: isAnomaly 
-          ? 'Warning: ID not found on masterlist. Allowed as Anomaly.'
-          : 'Initial Check-In Logged'
-      };
-
-    } else if (!existingLog.checkOutTime) {
-      const checkInTime = existingLog.checkInTime || existingLog.timestamp;
-      const elapsedMs = now - checkInTime;
-      const elapsedMinutes = Math.floor(elapsedMs / (1000 * 60));
-
-      let minDurationMinutes = 0;
-      try {
-        const localEvent = await getLocalEvent(activeEvent);
-        if (localEvent?.min_duration_minutes != null) {
-          minDurationMinutes = localEvent.min_duration_minutes;
+        if (data?.full_name && data.qr_hash !== 'anomaly') {
+          return { studentName: data.full_name, isAnomaly: false };
         }
-      } catch (err) {}
+      }
+    } catch (err) {}
 
-      let finalStatus = '';
-      let badgeColor = '';
-      let message = '';
+    return { studentName: 'Unknown Student', isAnomaly: true };
+  };
 
-      if (isAnomaly) {
-        finalStatus = 'Anomaly / Checked-Out';
-        badgeColor = 'bg-error/20 text-error';
-        message = 'Anomaly Check-Out Logged. Manual review required by host.';
-      } else {
-        const isValid = elapsedMinutes >= minDurationMinutes;
-        finalStatus = isValid ? 'Completed / Valid' : 'Incomplete / Invalid';
-        badgeColor = isValid ? 'bg-success/20 text-success' : 'bg-warning/20 text-warning';
-        message = isValid 
-          ? `Check-Out Validated (${elapsedMinutes}m / ${minDurationMinutes}m required)`
-          : `Early Check-Out (${elapsedMinutes}m / ${minDurationMinutes}m required)`;
+  const resolveMinDuration = async () => {
+    try {
+      const localEvent = await getLocalEvent(activeEvent);
+      if (localEvent?.min_duration_minutes != null) {
+        return localEvent.min_duration_minutes;
       }
 
-      const updatedLog = {
-        ...existingLog,
-        checkOutTime: now,
-        durationMinutes: elapsedMinutes,
-        status: finalStatus,
-        syncStatus: 'pending'
-      };
+      if (navigator.onLine) {
+        const { data } = await supabase
+          .from('events')
+          .select('min_duration_minutes')
+          .eq('event_id', activeEvent)
+          .maybeSingle();
 
-      await updateAttendanceLog(updatedLog);
+        if (data?.min_duration_minutes != null) {
+          return data.min_duration_minutes;
+        }
+      }
+    } catch (err) {}
 
-      resultPayload = {
-        type: 'Check-Out',
-        studentId: studentIdClean,
-        studentName,
-        timestamp: formattedTime,
-        status: finalStatus,
-        elapsedMinutes,
-        minDurationMinutes,
-        badgeColor,
-        message
-      };
+    return 0;
+  };
 
-    } else {
-      resultPayload = {
-        type: 'Completed',
-        studentId: studentIdClean,
-        studentName,
-        timestamp: formattedTime,
-        status: existingLog.status || 'Completed',
-        badgeColor: 'bg-neutral/20 text-neutral',
-        message: 'Student has already completed Check-In & Check-Out for this event.'
-      };
+  const processAttendance = async (scannedStudentId) => {
+    if (isEventEnded || isProcessingRef.current) return;
+    isProcessingRef.current = true;
+
+    try {
+      triggerBeep();
+      setIsScanning(false);
+
+      const now = Date.now();
+      const studentIdClean = scannedStudentId.trim();
+      const cooldownKey = `${activeEvent}:${studentIdClean}`;
+
+      const lastScanTime = scannedIdsRef.current[cooldownKey] || scannedIdsRef.current[studentIdClean];
+      if (lastScanTime && now - lastScanTime < COOLDOWN_MS) {
+        const formattedTime = new Date(now).toLocaleTimeString('en-US', {
+          hour12: true,
+          hour: 'numeric',
+          minute: 'numeric',
+          second: 'numeric'
+        });
+
+        setScanResult({
+          type: 'Throttled',
+          studentId: studentIdClean,
+          studentName: 'N/A',
+          timestamp: formattedTime,
+          isDuplicate: true,
+          message: 'Scan throttled. Please wait 5 minutes between scans.'
+        });
+        setIsManualModalOpen(false);
+        setManualId('');
+        return;
+      }
+
+      scannedIdsRef.current[cooldownKey] = now;
+      localStorage.setItem('scankoto_cooldowns', JSON.stringify(scannedIdsRef.current));
+
+      const { studentName, isAnomaly } = await resolveStudentInfo(studentIdClean);
+
+      // 1. Check local IndexedDB first, then cloud (supports multi-device Check-In -> Check-Out)
+      let existingLog = await getStudentAttendanceRecord(activeEvent, studentIdClean);
+
+      if (!existingLog && navigator.onLine) {
+        const { data: cloudRow } = await supabase
+          .from('attendance_logs')
+          .select('check_in_time, check_out_time, status')
+          .eq('event_id', activeEvent)
+          .eq('student_id', studentIdClean)
+          .maybeSingle();
+
+        if (cloudRow) {
+          const hydratedRecord = {
+            studentId: studentIdClean,
+            studentName,
+            eventId: activeEvent,
+            timestamp: new Date(cloudRow.check_in_time).getTime(),
+            checkInTime: new Date(cloudRow.check_in_time).getTime(),
+            checkOutTime: cloudRow.check_out_time ? new Date(cloudRow.check_out_time).getTime() : null,
+            status: cloudRow.status || 'Checked-In',
+            syncStatus: 'synced'
+          };
+          const insertedId = await saveAttendanceLog(hydratedRecord);
+          existingLog = { ...hydratedRecord, id: insertedId };
+        }
+      }
+
+      let resultPayload = {};
+      const formattedTime = new Date(now).toLocaleTimeString('en-US', {
+        hour12: true,
+        hour: 'numeric',
+        minute: 'numeric'
+      });
+
+      if (!existingLog) {
+        const initialStatus = isAnomaly ? 'Anomaly / Not on Masterlist' : 'Checked-In';
+        const newLog = {
+          studentId: studentIdClean,
+          studentName,
+          eventId: activeEvent,
+          timestamp: now,
+          checkInTime: now,
+          checkOutTime: null,
+          status: initialStatus,
+          syncStatus: 'pending'
+        };
+
+        await saveAttendanceLog(newLog);
+
+        resultPayload = {
+          type: 'Check-In',
+          studentId: studentIdClean,
+          studentName,
+          timestamp: formattedTime,
+          status: initialStatus,
+          badgeColor: isAnomaly ? 'bg-error/20 text-error' : 'bg-info/20 text-info',
+          message: isAnomaly
+            ? 'Warning: ID not found on masterlist. Allowed as Anomaly.'
+            : 'Initial Check-In Logged'
+        };
+      } else if (!existingLog.checkOutTime) {
+        const checkInTime = existingLog.checkInTime || existingLog.timestamp;
+        const elapsedMs = Math.max(0, now - checkInTime);
+        const elapsedMinutes = Math.floor(elapsedMs / 60000);
+        const minDurationMinutes = await resolveMinDuration();
+
+        let finalStatus = '';
+        let badgeColor = '';
+        let message = '';
+
+        if (isAnomaly) {
+          finalStatus = 'Anomaly / Checked-Out';
+          badgeColor = 'bg-error/20 text-error';
+          message = 'Anomaly Check-Out Logged. Manual review required by host.';
+        } else {
+          const isValid = elapsedMinutes >= minDurationMinutes;
+          finalStatus = isValid ? 'Completed / Valid' : 'Incomplete / Invalid';
+          badgeColor = isValid ? 'bg-success/20 text-success' : 'bg-warning/20 text-warning';
+          message = isValid
+            ? `Check-Out Validated (${elapsedMinutes}m / ${minDurationMinutes}m required)`
+            : `Early Check-Out (${elapsedMinutes}m / ${minDurationMinutes}m required)`;
+        }
+
+        const updatedLog = {
+          ...existingLog,
+          studentName: existingLog.studentName !== 'Unknown Student' ? existingLog.studentName : studentName,
+          checkInTime,
+          checkOutTime: now,
+          durationMinutes: elapsedMinutes,
+          status: finalStatus,
+          syncStatus: 'pending'
+        };
+
+        await updateAttendanceLog(updatedLog);
+
+        resultPayload = {
+          type: 'Check-Out',
+          studentId: studentIdClean,
+          studentName: updatedLog.studentName,
+          timestamp: formattedTime,
+          status: finalStatus,
+          elapsedMinutes,
+          minDurationMinutes,
+          badgeColor,
+          message
+        };
+      } else {
+        resultPayload = {
+          type: 'Completed',
+          studentId: studentIdClean,
+          studentName: existingLog.studentName || studentName,
+          timestamp: formattedTime,
+          status: existingLog.status || 'Completed',
+          badgeColor: 'bg-neutral/20 text-neutral',
+          message: 'Student has already completed Check-In & Check-Out for this event.'
+        };
+      }
+
+      await refreshPendingCount();
+
+      if (navigator.onLine) {
+        setIsSyncing(true);
+        await syncPendingRecords();
+        setIsSyncing(false);
+        refreshPendingCount();
+      }
+
+      setScanResult(resultPayload);
+      setIsManualModalOpen(false);
+      setManualId('');
+    } finally {
+      isProcessingRef.current = false;
     }
-
-    await refreshPendingCount();
-
-    if (navigator.onLine) {
-      setIsSyncing(true);
-      await syncPendingRecords();
-      setIsSyncing(false);
-      refreshPendingCount(); 
-    }
-
-    setScanResult(resultPayload);
-    setIsManualModalOpen(false); 
-    setManualId(''); 
   };
 
   const handleManualSubmit = () => {
@@ -376,19 +456,15 @@ const AttendanceScanner = () => {
 
   return (
     <div className="min-h-screen bg-base-200 flex flex-col items-center justify-center p-4">
-      
       <div className="card w-full max-w-md bg-base-100 shadow-xl">
         <div className="card-body items-center text-center">
-          
           <div className="w-full flex justify-between items-center mb-4">
             <div className="text-left">
-              <h2 className="card-title text-2xl font-bold text-primary mb-1">
-                SCANKOTO
-              </h2>
+              <h2 className="card-title text-2xl font-bold text-primary mb-1">SCANKOTO</h2>
               <div className="flex items-center gap-2 text-sm text-base-content/70">
                 <span className={`badge badge-xs ${networkStatus === 'online' ? 'badge-success' : 'badge-error'}`}></span>
                 {networkStatus === 'online' ? 'Online' : 'Offline'}
-                
+
                 {pendingCount > 0 && (
                   <span className="badge badge-neutral badge-sm ml-1 font-medium">
                     {isSyncing && <span className="loading loading-spinner loading-xs mr-1"></span>}
@@ -397,10 +473,10 @@ const AttendanceScanner = () => {
                 )}
               </div>
             </div>
-            
-            <button 
+
+            <button
               type="button"
-              onClick={toggleCamera} 
+              onClick={toggleCamera}
               className="btn btn-circle btn-ghost"
               title="Switch Camera"
               disabled={!isScanning || isEventEnded}
@@ -415,14 +491,14 @@ const AttendanceScanner = () => {
             <div className="text-left text-xs">
               <span className="font-semibold block text-slate-700">Offline Preparedness</span>
               <span className="text-base-content/60">
-                {cachedStudentCount !== null 
-                  ? `${cachedStudentCount} students cached` 
+                {cachedStudentCount !== null
+                  ? `${cachedStudentCount} students cached`
                   : 'Ready to cache event data'}
               </span>
             </div>
-            <button 
+            <button
               type="button"
-              onClick={handlePreCache} 
+              onClick={handlePreCache}
               disabled={isCaching || networkStatus === 'offline' || isEventEnded}
               className="btn btn-xs btn-outline btn-primary"
             >
@@ -430,43 +506,42 @@ const AttendanceScanner = () => {
             </button>
           </div>
 
-          {/* DYNAMIC LOCK SCREEN OR SCANNER */}
           <div className="w-full aspect-square rounded-2xl overflow-hidden border-4 border-primary/20 bg-black relative shadow-inner flex items-center justify-center">
-             {isEventEnded ? (
-               <div className="text-white/80 flex flex-col items-center text-center p-6">
-                 <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 mb-4 text-error" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                 </svg>
-                 <h3 className="font-bold text-xl mb-1">Event Ended</h3>
-                 <p className="text-sm opacity-70">Scanning has been disabled by the host.</p>
-               </div>
-             ) : isScanning ? (
-               <Scanner
-                  onScan={(detectedCodes) => {
-                    let scannedText = null;
-                    if (Array.isArray(detectedCodes) && detectedCodes.length > 0 && detectedCodes[0].rawValue) {
-                      scannedText = detectedCodes[0].rawValue;
-                    } else if (typeof detectedCodes === 'string') {
-                      scannedText = detectedCodes;
-                    }
-                    if (scannedText) processAttendance(scannedText);
-                  }}
-                  onError={(error) => console.error(error?.message)}
-                  constraints={{ facingMode: facingMode }}
-                  components={{ audio: false, onOff: true, finder: true }}
-               />
-             ) : (
-               <div className="text-white/50 flex flex-col items-center">
-                 <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 mb-2 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 9V5a2 2 0 00-2-2H6a2 2 0 00-2-2v14a2 2 0 002 2h2a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                 </svg>
-                 <span>Processing Scan...</span>
-               </div>
-             )}
+            {isEventEnded ? (
+              <div className="text-white/80 flex flex-col items-center text-center p-6">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 mb-4 text-error" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                </svg>
+                <h3 className="font-bold text-xl mb-1">Event Ended</h3>
+                <p className="text-sm opacity-70">Scanning has been disabled by the host.</p>
+              </div>
+            ) : isScanning ? (
+              <Scanner
+                onScan={(detectedCodes) => {
+                  let scannedText = null;
+                  if (Array.isArray(detectedCodes) && detectedCodes.length > 0 && detectedCodes[0].rawValue) {
+                    scannedText = detectedCodes[0].rawValue;
+                  } else if (typeof detectedCodes === 'string') {
+                    scannedText = detectedCodes;
+                  }
+                  if (scannedText) processAttendance(scannedText);
+                }}
+                onError={(error) => console.error(error?.message)}
+                constraints={{ facingMode }}
+                components={{ audio: false, onOff: true, finder: true }}
+              />
+            ) : (
+              <div className="text-white/50 flex flex-col items-center">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 mb-2 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 9V5a2 2 0 00-2-2H6a2 2 0 00-2-2v14a2 2 0 002 2h2a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                </svg>
+                <span>Processing Scan...</span>
+              </div>
+            )}
           </div>
 
           <div className="w-full mt-6">
-            <button 
+            <button
               type="button"
               className="btn btn-outline btn-primary w-full"
               onClick={() => setIsManualModalOpen(true)}
@@ -478,50 +553,42 @@ const AttendanceScanner = () => {
               Enter ID Manually
             </button>
           </div>
-          
+
           <div className="mt-4 text-center">
             <span className="text-xs text-base-content/50 font-mono">Event ID: {activeEvent}</span>
           </div>
-
         </div>
       </div>
 
       <dialog className={`modal modal-bottom sm:modal-middle ${scanResult ? 'modal-open' : ''}`}>
         <div className="modal-box text-center">
-          
           <div className={`w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 ${scanResult?.badgeColor || 'bg-success/20 text-success'}`}>
-             {scanResult?.isDuplicate ? (
-               <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-               </svg>
-             ) : (
-               <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-               </svg>
-             )}
+            {scanResult?.isDuplicate ? (
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+            ) : (
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+            )}
           </div>
-          
+
           {scanResult?.studentName && (
             <h4 className={`font-medium text-sm mb-1 ${scanResult.studentName === 'Unknown Student' ? 'text-error' : 'text-base-content/60'}`}>
               {scanResult.studentName}
             </h4>
           )}
 
-          <h3 className="font-bold text-2xl mb-1">
-            {scanResult?.studentId}
-          </h3>
+          <h3 className="font-bold text-2xl mb-1">{scanResult?.studentId}</h3>
 
           <div className="inline-block px-3 py-1 rounded-full font-semibold text-xs mb-3 bg-base-200">
             Action: <span className="uppercase">{scanResult?.type}</span>
           </div>
 
-          <p className="font-semibold text-sm mb-1 text-slate-700 px-4">
-            {scanResult?.message}
-          </p>
+          <p className="font-semibold text-sm mb-1 text-slate-700 px-4">{scanResult?.message}</p>
 
-          <div className="text-xs opacity-70 mb-6">
-            Timestamp: {scanResult?.timestamp}
-          </div>
+          <div className="text-xs opacity-70 mb-6">Timestamp: {scanResult?.timestamp}</div>
 
           <div className="modal-action mt-0 justify-center">
             <button type="button" className="btn btn-primary btn-wide" onClick={resetScanner}>
@@ -535,25 +602,30 @@ const AttendanceScanner = () => {
         <div className="modal-box">
           <h3 className="font-bold text-lg">Manual Entry</h3>
           <p className="py-4 text-sm text-base-content/70">Enter the Student ID below if the QR code is damaged or unreadable.</p>
-          <input 
-            type="text" 
-            placeholder="e.g. CSU-000001" 
-            className="input input-bordered w-full mb-4 font-mono" 
+          <input
+            type="text"
+            placeholder="e.g. CSU-000001"
+            className="input input-bordered w-full mb-4 font-mono"
             value={manualId}
             onChange={(e) => setManualId(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleManualSubmit()}
             autoFocus={isManualModalOpen}
           />
           <div className="modal-action mt-0">
-            <button type="button" className="btn" onClick={() => setIsManualModalOpen(false)}>Cancel</button>
-            <button type="button" className="btn btn-primary" onClick={handleManualSubmit}>Submit</button>
+            <button type="button" className="btn" onClick={() => setIsManualModalOpen(false)}>
+              Cancel
+            </button>
+            <button type="button" className="btn btn-primary" onClick={handleManualSubmit}>
+              Submit
+            </button>
           </div>
         </div>
         <form method="dialog" className="modal-backdrop">
-          <button type="button" onClick={() => setIsManualModalOpen(false)}>close</button>
+          <button type="button" onClick={() => setIsManualModalOpen(false)}>
+            close
+          </button>
         </form>
       </dialog>
-
     </div>
   );
 };
