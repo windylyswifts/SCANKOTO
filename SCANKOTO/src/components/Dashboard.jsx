@@ -17,6 +17,8 @@ const LOG_FILTERS = [
   { id: 'pending', label: 'Pending Sync' }
 ];
 
+const MAX_NOTIFICATIONS = 4;
+
 const formatClockTime = (epochMs) => {
   if (!epochMs) return '—';
   return new Date(epochMs).toLocaleTimeString('en-US', {
@@ -60,6 +62,8 @@ const Dashboard = () => {
   const [isRightPanelOpenDesktop, setIsRightPanelOpenDesktop] = useState(true);
 
   const highlightTimerRef = useRef(null);
+  const seededEventIdRef = useRef(null);
+  const knownLogStatesRef = useRef(new Map());
 
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < 1024);
@@ -97,13 +101,14 @@ const Dashboard = () => {
 
   // 2. Hybrid Fetcher: Merges Supabase logs with local IndexedDB pending scans
   const loadMergedLogs = useCallback(async () => {
-    if (!activeEvent?.event_id) return;
+    const currentEventId = activeEvent?.event_id;
+    if (!currentEventId) return;
 
     try {
       const { data: cloudData, error } = await supabase
         .from('attendance_logs')
         .select('student_id, check_in_time, check_out_time, status')
-        .eq('event_id', activeEvent.event_id);
+        .eq('event_id', currentEventId);
 
       if (error) throw error;
 
@@ -123,7 +128,7 @@ const Dashboard = () => {
       });
 
       const localPending = await getPendingLogs();
-      const eventPending = localPending.filter((log) => log.eventId === activeEvent.event_id);
+      const eventPending = localPending.filter((log) => log.eventId === currentEventId);
 
       const pendingIds = new Set(eventPending.map((l) => l.studentId));
       const finalCloudLogs = formattedCloudLogs.filter((l) => !pendingIds.has(l.studentId));
@@ -131,37 +136,45 @@ const Dashboard = () => {
       const merged = [...finalCloudLogs, ...eventPending];
       merged.sort((a, b) => (b.checkOutTime || b.timestamp) - (a.checkOutTime || a.timestamp));
 
-      setLogs((prevLogs) => {
-        const prevCheckedOut = prevLogs.filter((l) => Boolean(l.checkOutTime)).length;
-        const nextCheckedOut = merged.filter((l) => Boolean(l.checkOutTime)).length;
+      // Seed baseline states on initial load of an event so historical rows don't flood the feed
+      if (seededEventIdRef.current !== currentEventId) {
+        const initialStates = new Map();
+        merged.forEach((log) => {
+          initialStates.set(log.studentId, log.checkOutTime ? 'checked-out' : 'checked-in');
+        });
+        knownLogStatesRef.current = initialStates;
+        seededEventIdRef.current = currentEventId;
+        setLogs(merged);
+        return;
+      }
 
-        if (
-          prevLogs.length !== 0 &&
-          (merged.length > prevLogs.length || nextCheckedOut > prevCheckedOut)
-        ) {
-          const newestRecord = merged[0];
-          if (newestRecord?.studentId) {
-            setHighlightedStudentId(newestRecord.studentId);
-            if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
-            highlightTimerRef.current = setTimeout(() => setHighlightedStudentId(null), 1500);
-          }
+      // Detect genuine new check-in / check-out transitions synchronously
+      const newlyTriggered = [];
+      merged.forEach((log) => {
+        const nextPhase = log.checkOutTime ? 'checked-out' : 'checked-in';
+        const prevPhase = knownLogStatesRef.current.get(log.studentId);
 
-          setNotifications((prev) =>
-            [
-              {
-                id: Date.now(),
-                text:
-                  nextCheckedOut > prevCheckedOut
-                    ? `Check-out: ${newestRecord?.studentId || 'Student'}`
-                    : `Check-in: ${newestRecord?.studentId || 'Student'}`,
-                time: new Date()
-              },
-              ...prev
-            ].slice(0, 5)
-          );
+        if (prevPhase !== nextPhase) {
+          knownLogStatesRef.current.set(log.studentId, nextPhase);
+          newlyTriggered.push({
+            id: `${log.studentId}-${nextPhase}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            studentId: log.studentId,
+            text: `${nextPhase === 'checked-out' ? 'Check-out' : 'Check-in'}: ${log.studentId}`,
+            time: new Date()
+          });
         }
-        return merged;
       });
+
+      if (newlyTriggered.length > 0) {
+        const latestStudentId = newlyTriggered[0].studentId;
+        setHighlightedStudentId(latestStudentId);
+        if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+        highlightTimerRef.current = setTimeout(() => setHighlightedStudentId(null), 1500);
+
+        setNotifications((prev) => [...newlyTriggered, ...prev].slice(0, MAX_NOTIFICATIONS));
+      }
+
+      setLogs(merged);
     } catch (err) {
       console.error('Failed to load hybrid logs:', err);
     }
@@ -256,6 +269,9 @@ const Dashboard = () => {
   const handleEventSelection = (selectedEvent) => {
     if (activeEventId === selectedEvent.event_id) return;
 
+    seededEventIdRef.current = null;
+    knownLogStatesRef.current = new Map();
+    setNotifications([]);
     setActiveEvent(selectedEvent);
     setStatusFilter('all');
     setSearchQuery('');
@@ -298,10 +314,14 @@ const Dashboard = () => {
       prev.map((evt) => (evt.event_id === activeEventId ? { ...evt, end_time: now } : evt))
     );
     setNotifications((prev) =>
-      [{ id: Date.now(), text: 'Session stopped and scanner locked.', time: new Date() }, ...prev].slice(
-        0,
-        5
-      )
+      [
+        {
+          id: `lock-${Date.now()}`,
+          text: 'Session stopped & locked',
+          time: new Date()
+        },
+        ...prev
+      ].slice(0, MAX_NOTIFICATIONS)
     );
   };
 
@@ -702,30 +722,41 @@ const Dashboard = () => {
           />
         )}
         <aside className="w-full h-full border-l border-slate-200 p-6 overflow-y-auto bg-white">
+          {/* Fixed-Height Live Feed Container (Prevents Layout Shift) */}
           <div className="mb-8">
-            <h3 className="text-[11px] font-mono font-semibold uppercase tracking-wider mb-3.5 text-slate-400">
-              Live Feed Events
-            </h3>
-            <ul className="space-y-2.5">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-[11px] font-mono font-semibold uppercase tracking-wider text-slate-400">
+                Live Feed Events
+              </h3>
+              <span className="text-[10px] font-mono text-slate-400">
+                {notifications.length}/{MAX_NOTIFICATIONS}
+              </span>
+            </div>
+
+            <div className="h-[176px] overflow-hidden flex flex-col">
               {notifications.length === 0 ? (
-                <li className="text-xs text-slate-400">Awaiting scan activity...</li>
+                <div className="h-full rounded-2xl border border-dashed border-slate-200 bg-slate-50/60 flex items-center justify-center px-4 text-center">
+                  <span className="text-xs text-slate-400">Awaiting scan activity...</span>
+                </div>
               ) : (
-                notifications.map((notif) => (
-                  <li
-                    key={notif.id}
-                    className="flex items-center justify-between gap-2 text-xs bg-slate-50 border border-slate-100 px-3 py-2 rounded-xl animate-scale-in"
-                  >
-                    <span className="font-medium text-slate-700 truncate">{notif.text}</span>
-                    <span className="font-mono text-[10px] text-slate-400 flex-shrink-0">
-                      {notif.time.toLocaleTimeString('en-US', {
-                        hour: 'numeric',
-                        minute: '2-digit'
-                      })}
-                    </span>
-                  </li>
-                ))
+                <ul className="space-y-2">
+                  {notifications.map((notif) => (
+                    <li
+                      key={notif.id}
+                      className="h-[38px] flex items-center justify-between gap-2 text-xs bg-slate-50 border border-slate-100 px-3 rounded-xl animate-panel-enter"
+                    >
+                      <span className="font-medium text-slate-700 truncate">{notif.text}</span>
+                      <span className="font-mono text-[10px] text-slate-400 flex-shrink-0">
+                        {notif.time.toLocaleTimeString('en-US', {
+                          hour: 'numeric',
+                          minute: '2-digit'
+                        })}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
               )}
-            </ul>
+            </div>
           </div>
 
           <div className="mb-8">
