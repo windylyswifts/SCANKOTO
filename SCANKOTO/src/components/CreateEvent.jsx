@@ -328,6 +328,29 @@ const CreateEvent = () => {
         );
       }
 
+      // Replace and link only this session's specific student roster in event_roster
+      const { error: clearRosterError } = await supabase
+        .from('event_roster')
+        .delete()
+        .eq('event_id', eventIdSlug);
+
+      if (clearRosterError) {
+        throw new Error(`Failed to reset session roster: ${clearRosterError.message}`);
+      }
+
+      const rosterLinks = parsedStudents.map((student) => ({
+        event_id: eventIdSlug,
+        student_id: student.student_id
+      }));
+
+      const { error: rosterLinkError } = await supabase
+        .from('event_roster')
+        .insert(rosterLinks);
+
+      if (rosterLinkError) {
+        throw new Error(`Failed to link session roster: ${rosterLinkError.message}`);
+      }
+
       navigate('/dashboard');
     } catch (err) {
       console.error('CreateEvent error:', err);
