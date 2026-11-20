@@ -84,7 +84,7 @@ const StudentPortal = () => {
               minute: 'numeric',
               hour12: true
             })
-          : 'Pending / Not Checked Out',
+          : 'Pending Check-Out',
         hasCheckedOut,
         minutesRendered,
         target,
@@ -99,103 +99,109 @@ const StudentPortal = () => {
   };
 
   return (
-    <div className="min-h-screen bg-base-200 flex flex-col items-center justify-center p-4">
-      <div className="card w-full max-w-md bg-base-100 shadow-xl border border-base-200">
-        <div className="card-body p-8">
-          <div className="text-center mb-6">
-            <h2 className="card-title text-2xl font-bold justify-center text-primary mb-1">
-              SCANKOTO Portal
-            </h2>
-            <p className="text-sm font-semibold text-slate-700">
-              {eventNotFound
-                ? 'Event Not Found'
-                : eventDetails?.event_name || 'Loading Event...'}
-            </p>
-            <p className="text-xs text-base-content/60 mt-1">Check your rendered hours</p>
-          </div>
+    <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4 text-slate-900">
+      <div className="w-full max-w-md bg-white shadow-sm border border-slate-200/90 rounded-3xl p-8 relative overflow-hidden">
+        {/* Viewfinder Corner Reticles */}
+        <span className="pointer-events-none absolute top-3.5 left-3.5 w-3.5 h-3.5 border-t-2 border-l-2 border-slate-900/20 rounded-tl-xs" />
+        <span className="pointer-events-none absolute top-3.5 right-3.5 w-3.5 h-3.5 border-t-2 border-r-2 border-slate-900/20 rounded-tr-xs" />
+        <span className="pointer-events-none absolute bottom-3.5 left-3.5 w-3.5 h-3.5 border-b-2 border-l-2 border-slate-900/20 rounded-bl-xs" />
+        <span className="pointer-events-none absolute bottom-3.5 right-3.5 w-3.5 h-3.5 border-b-2 border-r-2 border-slate-900/20 rounded-br-xs" />
 
-          <form onSubmit={checkAttendance} className="space-y-4">
-            <div className="form-control">
-              <input
-                type="text"
-                placeholder="Enter Student ID (e.g. CSU-000001)"
-                className="input input-bordered w-full font-mono text-center focus:border-primary focus:ring-1 focus:ring-primary"
-                value={studentId}
-                onChange={(e) => setStudentId(e.target.value)}
-                disabled={eventNotFound}
-                required
-              />
+        <div className="text-center mb-6">
+          <span className="text-[10px] font-mono uppercase tracking-widest text-slate-400 block mb-1">
+            ATTENDANCE VERIFICATION PORTAL
+          </span>
+          <h2 className="text-2xl font-bold text-slate-900 tracking-tight">
+            {eventNotFound
+              ? 'Session Not Found'
+              : eventDetails?.event_name || 'Loading Session...'}
+          </h2>
+          <p className="text-xs text-slate-500 mt-1">Verify check-in, check-out, and rendered time</p>
+        </div>
+
+        <form onSubmit={checkAttendance} className="space-y-3">
+          <input
+            type="text"
+            placeholder="Enter Student ID (e.g. CSU-000001)"
+            className="input input-bordered w-full font-mono text-center bg-slate-50 focus:bg-white border-slate-200 text-slate-900 focus:border-slate-900 focus:outline-none rounded-xl"
+            value={studentId}
+            onChange={(e) => setStudentId(e.target.value)}
+            disabled={eventNotFound}
+            required
+          />
+
+          <button
+            type="submit"
+            className="btn bg-slate-900 hover:bg-slate-800 text-white border-none w-full rounded-xl font-semibold text-sm shadow-2xs"
+            disabled={loading || eventNotFound}
+          >
+            {loading ? <span className="loading loading-spinner loading-sm"></span> : 'Verify Status'}
+          </button>
+        </form>
+
+        {error && (
+          <div className="mt-5 p-3.5 bg-rose-50 border border-rose-200 rounded-xl text-center">
+            <p className="text-xs text-rose-700 font-semibold">{error}</p>
+          </div>
+        )}
+
+        {result && (
+          <div className="mt-6 space-y-3.5 animate-scale-in">
+            <div className="bg-slate-50 border border-slate-200/80 p-4 rounded-2xl text-center">
+              <h3 className="font-bold text-base text-slate-900">{result.name}</h3>
+              <p className="text-xs font-mono text-slate-500 mt-0.5">{result.studentId}</p>
             </div>
 
-            <button
-              type="submit"
-              className="btn btn-primary w-full shadow-sm"
-              disabled={loading || eventNotFound}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-white border border-slate-200 p-3 rounded-2xl text-center">
+                <p className="text-[10px] font-mono uppercase tracking-wider text-slate-400 mb-1">
+                  Time In
+                </p>
+                <p className="text-xs font-mono font-bold text-slate-900">{result.checkIn}</p>
+              </div>
+              <div className="bg-white border border-slate-200 p-3 rounded-2xl text-center">
+                <p className="text-[10px] font-mono uppercase tracking-wider text-slate-400 mb-1">
+                  Time Out
+                </p>
+                <p className="text-xs font-mono font-bold text-slate-900">{result.checkOut}</p>
+              </div>
+            </div>
+
+            <div
+              className={`p-4 rounded-2xl border text-center ${
+                result.isCleared
+                  ? 'bg-emerald-50/80 border-emerald-200 text-emerald-900'
+                  : 'bg-amber-50/80 border-amber-200 text-amber-900'
+              }`}
             >
-              {loading ? <span className="loading loading-spinner loading-sm"></span> : 'Check Status'}
-            </button>
-          </form>
-
-          {error && (
-            <div className="mt-6 p-4 bg-error/10 border border-error/20 rounded-xl text-center">
-              <p className="text-sm text-error font-medium">{error}</p>
+              <p className="text-xs font-mono font-bold uppercase tracking-wider">
+                {result.isCleared
+                  ? 'CLEARED // COMPLETED'
+                  : result.hasCheckedOut
+                  ? 'INSUFFICIENT DURATION'
+                  : 'PENDING CHECK-OUT'}
+              </p>
+              <p className="text-3xl font-mono font-extrabold my-2">
+                {result.minutesRendered}{' '}
+                <span className="text-xs font-semibold opacity-75">MINS</span>
+              </p>
+              <p className="text-[11px] font-mono opacity-80">
+                REQUIRED THRESHOLD: {result.target} MINS
+              </p>
             </div>
-          )}
-
-          {result && (
-            <div className="mt-6 space-y-4 animate-scale-in">
-              <div className="bg-base-200 p-4 rounded-xl text-center">
-                <h3 className="font-bold text-lg text-slate-800">{result.name}</h3>
-                <p className="text-xs font-mono text-base-content/60 mt-1">{result.studentId}</p>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div className="bg-base-100 border border-base-200 p-3 rounded-xl text-center shadow-sm">
-                  <p className="text-xs font-semibold text-slate-500 mb-1">Time In</p>
-                  <p className="text-sm font-bold">{result.checkIn}</p>
-                </div>
-                <div className="bg-base-100 border border-base-200 p-3 rounded-xl text-center shadow-sm">
-                  <p className="text-xs font-semibold text-slate-500 mb-1">Time Out</p>
-                  <p className="text-sm font-bold">{result.checkOut}</p>
-                </div>
-              </div>
-
-              <div
-                className={`p-4 rounded-xl border text-center ${
-                  result.isCleared
-                    ? 'bg-success/10 border-success/20 text-success'
-                    : 'bg-warning/10 border-warning/20 text-warning-content'
-                }`}
-              >
-                <p className="text-sm font-bold mb-1">
-                  {result.isCleared
-                    ? '✅ Cleared / Completed'
-                    : result.hasCheckedOut
-                    ? '⚠️ Insufficient Duration'
-                    : '⏳ Pending Check-Out'}
-                </p>
-                <p className="text-2xl font-black my-2">
-                  {result.minutesRendered}{' '}
-                  <span className="text-sm font-semibold opacity-70">mins</span>
-                </p>
-                <p className="text-xs font-medium opacity-80">
-                  Target requirement: {result.target} mins
-                </p>
-              </div>
-            </div>
-          )}
-
-          <div className="divider my-2"></div>
-
-          <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 flex items-start gap-3">
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-blue-500 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            <p className="text-xs text-blue-800 leading-relaxed">
-              <strong>NOTE:</strong> Event scanners often operate entirely offline. If your status shows as{' '}
-              <em>"No Record"</em> or your <em>Time Out is missing</em>, the officer's device may not have synced to the cloud yet. Please wait or ask your organization if they have uploaded the final logs.
-            </p>
           </div>
+        )}
+
+        <div className="border-t border-slate-100 my-5"></div>
+
+        <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-3.5 flex items-start gap-2.5">
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-slate-500 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <p className="text-[11px] text-slate-600 leading-relaxed">
+            <strong>OFFLINE SYNC NOTICE:</strong> Field scanners often operate offline. If your record shows as{' '}
+            <em>"No Record"</em> or your <em>Time Out is pending</em>, the officer's scanner may not have synced to the cloud yet.
+          </p>
         </div>
       </div>
     </div>
