@@ -23,6 +23,17 @@
   }
 }
 
+@keyframes panel-enter {
+  0% {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 @keyframes optical-sweep {
   0% {
     transform: translateY(0%);
@@ -44,8 +55,34 @@
   }
 }
 
+@keyframes reticle-breathe {
+  0%, 100% {
+    opacity: 0.7;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.06);
+  }
+}
+
+@keyframes row-flash {
+  0% {
+    background-color: rgba(16, 185, 129, 0.14);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
 .animate-scale-in {
-  animation: scale-in 0.16s ease-out forwards;
+  will-change: transform, opacity;
+  animation: scale-in 0.18s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-panel-enter {
+  will-change: transform, opacity;
+  animation: panel-enter 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
 .animate-optical-sweep {
@@ -56,4 +93,24 @@
 .animate-scan-reject {
   will-change: transform;
   animation: scan-reject 0.36s ease-in-out;
+}
+
+.animate-reticle-breathe {
+  will-change: transform, opacity;
+  animation: reticle-breathe 2.2s ease-in-out infinite;
+}
+
+.animate-row-flash {
+  animation: row-flash 1.4s ease-out forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-scale-in,
+  .animate-panel-enter,
+  .animate-optical-sweep,
+  .animate-scan-reject,
+  .animate-reticle-breathe,
+  .animate-row-flash {
+    animation: none !important;
+  }
 }

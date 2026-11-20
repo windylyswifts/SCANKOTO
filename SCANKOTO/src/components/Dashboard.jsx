@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { supabase } from '../utils/supabaseClient';
 import { getPendingLogs } from '../utils/db';
 import { exportToCSV } from '../utils/export';
@@ -47,21 +47,27 @@ const Dashboard = () => {
   // --- Attendance & Activity State ---
   const [logs, setLogs] = useState([]);
   const [notifications, setNotifications] = useState([]);
+  const [highlightedStudentId, setHighlightedStudentId] = useState(null);
 
   // --- UI & Control State ---
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
-  const [copiedKey, setCopiedKey] = useState(null); // 'scanner' | 'portal' | null
+  const [copiedKey, setCopiedKey] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
   const [rightPanelWidth, setRightPanelWidth] = useState(296);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 1024);
   const [isRightPanelOpenMobile, setIsRightPanelOpenMobile] = useState(false);
   const [isRightPanelOpenDesktop, setIsRightPanelOpenDesktop] = useState(true);
 
+  const highlightTimerRef = useRef(null);
+
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < 1024);
     window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+    };
   }, []);
 
   // 1. Load non-archived events on mount
@@ -133,11 +139,21 @@ const Dashboard = () => {
           prevLogs.length !== 0 &&
           (merged.length > prevLogs.length || nextCheckedOut > prevCheckedOut)
         ) {
+          const newestRecord = merged[0];
+          if (newestRecord?.studentId) {
+            setHighlightedStudentId(newestRecord.studentId);
+            if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+            highlightTimerRef.current = setTimeout(() => setHighlightedStudentId(null), 1500);
+          }
+
           setNotifications((prev) =>
             [
               {
                 id: Date.now(),
-                text: nextCheckedOut > prevCheckedOut ? 'Check-out recorded' : 'New scan logged',
+                text:
+                  nextCheckedOut > prevCheckedOut
+                    ? `Check-out: ${newestRecord?.studentId || 'Student'}`
+                    : `Check-in: ${newestRecord?.studentId || 'Student'}`,
                 time: new Date()
               },
               ...prev
@@ -282,7 +298,7 @@ const Dashboard = () => {
       prev.map((evt) => (evt.event_id === activeEventId ? { ...evt, end_time: now } : evt))
     );
     setNotifications((prev) =>
-      [{ id: Date.now(), text: 'Event stopped and scanner locked.', time: new Date() }, ...prev].slice(
+      [{ id: Date.now(), text: 'Session stopped and scanner locked.', time: new Date() }, ...prev].slice(
         0,
         5
       )
@@ -307,7 +323,7 @@ const Dashboard = () => {
             <div className="flex items-center gap-2.5">
               <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Scanner Console</h1>
               <span
-                className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-mono font-semibold border ${
+                className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-mono font-semibold border transition-colors duration-300 ${
                   !activeEventId
                     ? 'bg-slate-100 text-slate-500 border-slate-200'
                     : isEventEnded
@@ -338,7 +354,7 @@ const Dashboard = () => {
               <div
                 tabIndex={0}
                 role="button"
-                className="btn btn-sm bg-white hover:bg-slate-100 text-slate-800 border border-slate-300 rounded-xl font-semibold text-xs shadow-2xs"
+                className="btn btn-sm bg-white hover:bg-slate-100 active:scale-[0.98] text-slate-800 border border-slate-300 rounded-xl font-semibold text-xs shadow-2xs transition-transform"
               >
                 <span className="truncate max-w-[150px] sm:max-w-[210px]">{activeEventName}</span>
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5 ml-1 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -347,7 +363,7 @@ const Dashboard = () => {
               </div>
               <ul
                 tabIndex={0}
-                className="dropdown-content z-[20] menu p-1.5 shadow-xl bg-white rounded-2xl w-64 border border-slate-200 mt-2 max-h-64 overflow-y-auto"
+                className="dropdown-content z-[20] menu p-1.5 shadow-xl bg-white rounded-2xl w-64 border border-slate-200 mt-2 max-h-64 overflow-y-auto animate-scale-in"
               >
                 {cloudEvents.length === 0 ? (
                   <li className="p-3 text-xs text-slate-400 text-center">No Active Events</li>
@@ -357,7 +373,7 @@ const Dashboard = () => {
                       <button
                         type="button"
                         onClick={() => handleEventSelection(evt)}
-                        className={`rounded-xl text-left text-xs py-2.5 flex items-center justify-between ${
+                        className={`rounded-xl text-left text-xs py-2.5 flex items-center justify-between transition-colors ${
                           activeEventId === evt.event_id
                             ? 'bg-slate-900 text-white font-semibold'
                             : 'text-slate-700 hover:bg-slate-100'
@@ -379,7 +395,7 @@ const Dashboard = () => {
               type="button"
               disabled={!activeEventId}
               onClick={() => exportToCSV(logs, targetDuration, activeEventName)}
-              className="btn btn-sm bg-slate-900 hover:bg-slate-800 disabled:bg-slate-200 text-white border-none rounded-xl font-semibold text-xs shadow-2xs gap-1.5"
+              className="btn btn-sm bg-slate-900 hover:bg-slate-800 active:scale-[0.98] disabled:bg-slate-200 text-white border-none rounded-xl font-semibold text-xs shadow-2xs gap-1.5 transition-transform"
             >
               <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
@@ -394,7 +410,7 @@ const Dashboard = () => {
                 if (isMobile) setIsRightPanelOpenMobile(!isRightPanelOpenMobile);
                 else setIsRightPanelOpenDesktop(!isRightPanelOpenDesktop);
               }}
-              className="btn btn-sm btn-square bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-xl"
+              className="btn btn-sm btn-square bg-white hover:bg-slate-100 active:scale-95 text-slate-700 border border-slate-300 rounded-xl transition-transform"
               title="Toggle Activity Panel"
             >
               <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -404,118 +420,130 @@ const Dashboard = () => {
           </div>
         </header>
 
-        {/* Telemetry & Field Links Grid */}
-        <section className="grid grid-cols-1 lg:grid-cols-12 gap-4 mb-6">
-          {/* Optical Telemetry Card (Viewfinder Corner Brackets) */}
-          <div className="lg:col-span-5 bg-white border border-slate-200/90 rounded-2xl p-5 relative overflow-hidden shadow-2xs flex flex-col justify-between">
-            {/* Viewfinder Corner Reticles */}
-            <span className="pointer-events-none absolute top-2.5 left-2.5 w-3 h-3 border-t-2 border-l-2 border-slate-900/25 rounded-tl-xs" />
-            <span className="pointer-events-none absolute top-2.5 right-2.5 w-3 h-3 border-t-2 border-r-2 border-slate-900/25 rounded-tr-xs" />
-            <span className="pointer-events-none absolute bottom-2.5 left-2.5 w-3 h-3 border-b-2 border-l-2 border-slate-900/25 rounded-bl-xs" />
-            <span className="pointer-events-none absolute bottom-2.5 right-2.5 w-3 h-3 border-b-2 border-r-2 border-slate-900/25 rounded-br-xs" />
+        {/* Session-Keyed Animated Telemetry & Log Workspace */}
+        <div key={activeEventId || 'empty'} className="flex-1 flex flex-col animate-panel-enter">
+          {/* Telemetry & Field Links Grid */}
+          <section className="grid grid-cols-1 lg:grid-cols-12 gap-4 mb-6">
+            {/* Optical Telemetry Card (Viewfinder Corner Brackets) */}
+            <div className="lg:col-span-5 bg-white border border-slate-200/90 rounded-2xl p-5 relative overflow-hidden shadow-2xs flex flex-col justify-between">
+              <span className="pointer-events-none absolute top-2.5 left-2.5 w-3 h-3 border-t-2 border-l-2 border-slate-900/25 rounded-tl-xs" />
+              <span className="pointer-events-none absolute top-2.5 right-2.5 w-3 h-3 border-t-2 border-r-2 border-slate-900/25 rounded-tr-xs" />
+              <span className="pointer-events-none absolute bottom-2.5 left-2.5 w-3 h-3 border-b-2 border-l-2 border-slate-900/25 rounded-bl-xs" />
+              <span className="pointer-events-none absolute bottom-2.5 right-2.5 w-3 h-3 border-b-2 border-r-2 border-slate-900/25 rounded-br-xs" />
 
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-[11px] font-mono font-semibold uppercase tracking-wider text-slate-500">
-                Captured Scans
-              </span>
-              <span className="text-[11px] font-mono font-semibold text-slate-600">
-                {telemetry.attendanceRate}% CAPACITY
-              </span>
-            </div>
-
-            <div className="flex items-baseline gap-2 my-1">
-              <span className="text-4xl font-extrabold font-mono tabular-nums text-slate-900 tracking-tight">
-                {telemetry.total}
-              </span>
-              <span className="text-lg font-mono text-slate-400 tabular-nums">
-                / {expectedCount}
-              </span>
-            </div>
-
-            {/* Capacity Progress Bar */}
-            <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden my-3">
-              <div
-                className="h-full bg-slate-900 rounded-full transition-all duration-500"
-                style={{ width: `${telemetry.attendanceRate}%` }}
-              />
-            </div>
-
-            <div className="flex items-center justify-between text-[11px] font-mono text-slate-500 pt-1 border-t border-slate-100">
-              <span>OUT: {telemetry.completed}</span>
-              <span>REQ: {targetDuration > 0 ? `${targetDuration}M` : 'NONE'}</span>
-              <span className={telemetry.pendingSync > 0 ? 'text-amber-600 font-semibold' : 'text-emerald-600 font-semibold'}>
-                {telemetry.pendingSync > 0 ? `${telemetry.pendingSync} QUEUED` : 'CLOUD SYNCED'}
-              </span>
-            </div>
-          </div>
-
-          {/* Field Links & Session Control Stack */}
-          <div className="lg:col-span-7 grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {/* Field Scanner Link Card */}
-            <button
-              type="button"
-              disabled={!activeEventId || isEventEnded}
-              onClick={() => copyRelativeUrl(`/scan/${activeEventId}`, 'scanner')}
-              className={`group text-left rounded-2xl p-5 border transition-all flex flex-col justify-between ${
-                activeEventId && !isEventEnded
-                  ? 'bg-white hover:bg-slate-900 hover:text-white border-slate-200/90 hover:border-slate-900 cursor-pointer shadow-2xs'
-                  : 'bg-slate-100/70 border-slate-200 opacity-55 cursor-not-allowed'
-              }`}
-            >
-              <div className="flex items-center justify-between w-full mb-3">
-                <span className="p-2 rounded-xl bg-slate-100 group-hover:bg-white/10 text-slate-800 group-hover:text-white transition-colors">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" />
-                  </svg>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[11px] font-mono font-semibold uppercase tracking-wider text-slate-500">
+                  Captured Scans
                 </span>
-                <span className="text-[11px] font-mono font-semibold uppercase px-2 py-0.5 rounded-md bg-slate-100 group-hover:bg-white/15 text-slate-600 group-hover:text-slate-200">
-                  {copiedKey === 'scanner' ? 'COPIED' : 'COPY URL'}
+                <span className="text-[11px] font-mono font-semibold text-slate-600">
+                  {telemetry.attendanceRate}% CAPACITY
                 </span>
               </div>
-              <div>
-                <h2 className="text-sm font-bold tracking-tight">
-                  {copiedKey === 'scanner' ? 'Scanner Link Copied!' : 'Field QR Scanner'}
-                </h2>
-                <p className="text-xs text-slate-500 group-hover:text-slate-300 mt-0.5">
-                  Deploy to officer devices for check-in & check-out
-                </p>
-              </div>
-            </button>
 
-            {/* Student Portal Link Card */}
-            <button
-              type="button"
-              disabled={!activeEventId}
-              onClick={() => copyRelativeUrl(`/portal/${activeEventId}`, 'portal')}
-              className={`group text-left rounded-2xl p-5 border transition-all flex flex-col justify-between ${
-                activeEventId
-                  ? 'bg-white hover:border-slate-400 border-slate-200/90 cursor-pointer shadow-2xs'
-                  : 'bg-slate-100/70 border-slate-200 opacity-55 cursor-not-allowed'
-              }`}
-            >
-              <div className="flex items-center justify-between w-full mb-3">
-                <span className="p-2 rounded-xl bg-slate-100 text-slate-800">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                  </svg>
+              <div className="flex items-baseline gap-2 my-1">
+                <span className="text-4xl font-extrabold font-mono tabular-nums text-slate-900 tracking-tight">
+                  {telemetry.total}
                 </span>
-                <span className="text-[11px] font-mono font-semibold uppercase px-2 py-0.5 rounded-md bg-slate-100 text-slate-600">
-                  {copiedKey === 'portal' ? 'COPIED' : 'PUBLIC'}
+                <span className="text-lg font-mono text-slate-400 tabular-nums">
+                  / {expectedCount}
                 </span>
               </div>
-              <div>
-                <h2 className="text-sm font-bold text-slate-900 tracking-tight">
-                  {copiedKey === 'portal' ? 'Portal Link Copied!' : 'Student Verification Portal'}
-                </h2>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Self-service lookup for student rendered minutes
-                </p>
-              </div>
-            </button>
 
-            {/* Session Lock / Stop Event Bar (Spans both columns on sm+) */}
-            <div className="sm:col-span-2 bg-white border border-slate-200/90 rounded-2xl px-5 py-3.5 shadow-2xs flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-3">
+              {/* Smooth GPU Progress Bar */}
+              <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden my-3">
+                <div
+                  className="h-full bg-slate-900 rounded-full transition-all duration-500 ease-out"
+                  style={{ width: `${telemetry.attendanceRate}%` }}
+                />
+              </div>
+
+              <div className="flex items-center justify-between text-[11px] font-mono text-slate-500 pt-1 border-t border-slate-100">
+                <span>OUT: {telemetry.completed}</span>
+                <span>REQ: {targetDuration > 0 ? `${targetDuration}M` : 'NONE'}</span>
+                <span className={telemetry.pendingSync > 0 ? 'text-amber-600 font-semibold' : 'text-emerald-600 font-semibold'}>
+                  {telemetry.pendingSync > 0 ? `${telemetry.pendingSync} QUEUED` : 'CLOUD SYNCED'}
+                </span>
+              </div>
+            </div>
+
+            {/* Field Links & Session Control Stack */}
+            <div className="lg:col-span-7 grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {/* Field Scanner Link Card */}
+              <button
+                type="button"
+                disabled={!activeEventId || isEventEnded}
+                onClick={() => copyRelativeUrl(`/scan/${activeEventId}`, 'scanner')}
+                className={`group text-left rounded-2xl p-5 border transition-all duration-200 flex flex-col justify-between ${
+                  activeEventId && !isEventEnded
+                    ? 'bg-white hover:bg-slate-900 hover:text-white active:scale-[0.99] border-slate-200/90 hover:border-slate-900 cursor-pointer shadow-2xs'
+                    : 'bg-slate-100/70 border-slate-200 opacity-55 cursor-not-allowed'
+                }`}
+              >
+                <div className="flex items-center justify-between w-full mb-3">
+                  <span className="p-2 rounded-xl bg-slate-100 group-hover:bg-white/10 text-slate-800 group-hover:text-white transition-colors">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" />
+                    </svg>
+                  </span>
+                  <span
+                    className={`text-[11px] font-mono font-semibold uppercase px-2 py-0.5 rounded-md transition-colors ${
+                      copiedKey === 'scanner'
+                        ? 'bg-emerald-500 text-white'
+                        : 'bg-slate-100 group-hover:bg-white/15 text-slate-600 group-hover:text-slate-200'
+                    }`}
+                  >
+                    {copiedKey === 'scanner' ? 'COPIED' : 'COPY URL'}
+                  </span>
+                </div>
+                <div>
+                  <h2 className="text-sm font-bold tracking-tight">
+                    {copiedKey === 'scanner' ? 'Scanner Link Copied!' : 'Field QR Scanner'}
+                  </h2>
+                  <p className="text-xs text-slate-500 group-hover:text-slate-300 mt-0.5 transition-colors">
+                    Deploy to officer devices for check-in & check-out
+                  </p>
+                </div>
+              </button>
+
+              {/* Student Portal Link Card */}
+              <button
+                type="button"
+                disabled={!activeEventId}
+                onClick={() => copyRelativeUrl(`/portal/${activeEventId}`, 'portal')}
+                className={`group text-left rounded-2xl p-5 border transition-all duration-200 flex flex-col justify-between ${
+                  activeEventId
+                    ? 'bg-white hover:border-slate-400 active:scale-[0.99] border-slate-200/90 cursor-pointer shadow-2xs'
+                    : 'bg-slate-100/70 border-slate-200 opacity-55 cursor-not-allowed'
+                }`}
+              >
+                <div className="flex items-center justify-between w-full mb-3">
+                  <span className="p-2 rounded-xl bg-slate-100 text-slate-800">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                    </svg>
+                  </span>
+                  <span
+                    className={`text-[11px] font-mono font-semibold uppercase px-2 py-0.5 rounded-md transition-colors ${
+                      copiedKey === 'portal'
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-slate-100 text-slate-600'
+                    }`}
+                  >
+                    {copiedKey === 'portal' ? 'COPIED' : 'PUBLIC'}
+                  </span>
+                </div>
+                <div>
+                  <h2 className="text-sm font-bold text-slate-900 tracking-tight">
+                    {copiedKey === 'portal' ? 'Portal Link Copied!' : 'Student Verification Portal'}
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Self-service lookup for student rendered minutes
+                  </p>
+                </div>
+              </button>
+
+              {/* Session Lock / Stop Event Bar */}
+              <div className="sm:col-span-2 bg-white border border-slate-200/90 rounded-2xl px-5 py-3.5 shadow-2xs flex flex-wrap items-center justify-between gap-3">
                 <div className="text-xs">
                   <span className="font-semibold text-slate-800 block">
                     {isEventEnded ? 'Scanner Session Locked' : 'Session Gate Control'}
@@ -526,121 +554,126 @@ const Dashboard = () => {
                       : 'Locking immediately disables all active field scanners.'}
                   </span>
                 </div>
-              </div>
 
-              <button
-                type="button"
-                disabled={!activeEventId || isEventEnded}
-                onClick={handleStopEvent}
-                className={`btn btn-xs rounded-lg font-mono uppercase tracking-wider px-3.5 h-8 ${
-                  isEventEnded || !activeEventId
-                    ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
-                    : 'bg-rose-50 hover:bg-rose-600 text-rose-700 hover:text-white border-rose-200 hover:border-rose-600'
-                }`}
-              >
-                {isEventEnded ? 'Session Ended' : 'Stop & Lock Event'}
-              </button>
-            </div>
-          </div>
-        </section>
-
-        {/* Live Attendance Feed Table */}
-        <section className="bg-white border border-slate-200/90 shadow-2xs rounded-2xl p-5 md:p-6 flex-1 flex flex-col min-h-[320px]">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-4">
-            <div className="flex flex-wrap items-center gap-1.5">
-              {LOG_FILTERS.map((filter) => {
-                const isActive = statusFilter === filter.id;
-                return (
-                  <button
-                    key={filter.id}
-                    type="button"
-                    onClick={() => setStatusFilter(filter.id)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                      isActive
-                        ? 'bg-slate-900 text-white'
-                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200/70'
-                    }`}
-                  >
-                    {filter.label}
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="relative w-full md:w-64">
-              <input
-                type="text"
-                placeholder="Filter by Student ID..."
-                className="input input-sm input-bordered w-full bg-slate-50 focus:bg-white border-slate-200 text-slate-800 font-mono text-xs placeholder:font-sans placeholder:text-slate-400 focus:border-slate-900 focus:outline-none rounded-xl pr-8"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-              />
-              {searchQuery && (
                 <button
                   type="button"
-                  onClick={() => setSearchQuery('')}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 text-xs"
-                  aria-label="Clear search"
+                  disabled={!activeEventId || isEventEnded}
+                  onClick={handleStopEvent}
+                  className={`btn btn-xs rounded-lg font-mono uppercase tracking-wider px-3.5 h-8 transition-all ${
+                    isEventEnded || !activeEventId
+                      ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
+                      : 'bg-rose-50 hover:bg-rose-600 active:scale-95 text-rose-700 hover:text-white border-rose-200 hover:border-rose-600'
+                  }`}
                 >
-                  ✕
+                  {isEventEnded ? 'Session Ended' : 'Stop & Lock Event'}
                 </button>
-              )}
+              </div>
             </div>
-          </div>
+          </section>
 
-          <div className="overflow-x-auto flex-1 border-t border-slate-100">
-            <table className="table table-sm table-pin-rows">
-              <thead>
-                <tr className="bg-slate-50/90 text-slate-500 font-mono text-[11px] uppercase border-b border-slate-200/80">
-                  <th>Student ID</th>
-                  <th>Time In</th>
-                  <th>Time Out</th>
-                  <th>Status</th>
-                  <th>Sync</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredTableLogs.map((log) => (
-                  <tr key={log.id} className="hover:bg-slate-50 border-b border-slate-100/80">
-                    <td className="font-mono font-bold text-slate-900">{log.studentId}</td>
-                    <td className="font-mono text-xs text-slate-600">
-                      {formatClockTime(log.checkInTime || log.timestamp)}
-                    </td>
-                    <td className="font-mono text-xs text-slate-600">
-                      {formatClockTime(log.checkOutTime)}
-                    </td>
-                    <td>
-                      <span
-                        className={`inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold border ${getStatusBadgeStyle(
-                          log.status
-                        )}`}
-                      >
-                        {log.status || 'Checked-In'}
-                      </span>
-                    </td>
-                    <td>
-                      <span className="inline-flex items-center gap-1.5 text-xs font-mono text-slate-500">
-                        <span
-                          className={`w-1.5 h-1.5 rounded-full ${
-                            log.syncStatus === 'synced' ? 'bg-emerald-500' : 'bg-amber-500'
-                          }`}
-                        />
-                        {log.syncStatus || 'pending'}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-                {filteredTableLogs.length === 0 && (
-                  <tr>
-                    <td colSpan="5" className="text-center text-slate-400 py-12 text-xs font-mono">
-                      NO MATCHING SCAN RECORDS
-                    </td>
-                  </tr>
+          {/* Live Attendance Feed Table */}
+          <section className="bg-white border border-slate-200/90 shadow-2xs rounded-2xl p-5 md:p-6 flex-1 flex flex-col min-h-[320px]">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-4">
+              <div className="flex flex-wrap items-center gap-1.5">
+                {LOG_FILTERS.map((filter) => {
+                  const isActive = statusFilter === filter.id;
+                  return (
+                    <button
+                      key={filter.id}
+                      type="button"
+                      onClick={() => setStatusFilter(filter.id)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all active:scale-95 ${
+                        isActive
+                          ? 'bg-slate-900 text-white shadow-2xs'
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200/70'
+                      }`}
+                    >
+                      {filter.label}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="relative w-full md:w-64">
+                <input
+                  type="text"
+                  placeholder="Filter by Student ID..."
+                  className="input input-sm input-bordered w-full bg-slate-50 focus:bg-white border-slate-200 text-slate-800 font-mono text-xs placeholder:font-sans placeholder:text-slate-400 focus:border-slate-900 focus:outline-none rounded-xl pr-8 transition-colors"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 text-xs"
+                    aria-label="Clear search"
+                  >
+                    ✕
+                  </button>
                 )}
-              </tbody>
-            </table>
-          </div>
-        </section>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto flex-1 border-t border-slate-100">
+              <table className="table table-sm table-pin-rows">
+                <thead>
+                  <tr className="bg-slate-50/90 text-slate-500 font-mono text-[11px] uppercase border-b border-slate-200/80">
+                    <th>Student ID</th>
+                    <th>Time In</th>
+                    <th>Time Out</th>
+                    <th>Status</th>
+                    <th>Sync</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredTableLogs.map((log) => (
+                    <tr
+                      key={log.id}
+                      className={`hover:bg-slate-50 border-b border-slate-100/80 transition-colors ${
+                        highlightedStudentId === log.studentId ? 'animate-row-flash' : ''
+                      }`}
+                    >
+                      <td className="font-mono font-bold text-slate-900">{log.studentId}</td>
+                      <td className="font-mono text-xs text-slate-600">
+                        {formatClockTime(log.checkInTime || log.timestamp)}
+                      </td>
+                      <td className="font-mono text-xs text-slate-600">
+                        {formatClockTime(log.checkOutTime)}
+                      </td>
+                      <td>
+                        <span
+                          className={`inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold border ${getStatusBadgeStyle(
+                            log.status
+                          )}`}
+                        >
+                          {log.status || 'Checked-In'}
+                        </span>
+                      </td>
+                      <td>
+                        <span className="inline-flex items-center gap-1.5 text-xs font-mono text-slate-500">
+                          <span
+                            className={`w-1.5 h-1.5 rounded-full ${
+                              log.syncStatus === 'synced' ? 'bg-emerald-500' : 'bg-amber-500'
+                            }`}
+                          />
+                          {log.syncStatus || 'pending'}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                  {filteredTableLogs.length === 0 && (
+                    <tr>
+                      <td colSpan="5" className="text-center text-slate-400 py-12 text-xs font-mono">
+                        NO MATCHING SCAN RECORDS
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
       </main>
 
       {/* Mobile Drawer Backdrop */}
@@ -654,7 +687,7 @@ const Dashboard = () => {
       {/* Resizable Telemetry Activity Sidebar */}
       <div
         className={`
-          fixed lg:relative inset-y-0 right-0 z-50 bg-white flex-shrink-0 transition-transform duration-300 ease-in-out h-full shadow-xl lg:shadow-none
+          fixed lg:relative inset-y-0 right-0 z-50 bg-white flex-shrink-0 transition-transform duration-300 ease-out h-full shadow-xl lg:shadow-none
           ${isMobile ? (isRightPanelOpenMobile ? 'translate-x-0' : 'translate-x-full') : isRightPanelOpenDesktop ? 'translate-x-0 flex' : 'hidden'}
         `}
         style={{ width: isMobile ? 296 : rightPanelWidth }}
@@ -678,7 +711,10 @@ const Dashboard = () => {
                 <li className="text-xs text-slate-400">Awaiting scan activity...</li>
               ) : (
                 notifications.map((notif) => (
-                  <li key={notif.id} className="flex items-center justify-between gap-2 text-xs bg-slate-50 border border-slate-100 px-3 py-2 rounded-xl">
+                  <li
+                    key={notif.id}
+                    className="flex items-center justify-between gap-2 text-xs bg-slate-50 border border-slate-100 px-3 py-2 rounded-xl animate-scale-in"
+                  >
                     <span className="font-medium text-slate-700 truncate">{notif.text}</span>
                     <span className="font-mono text-[10px] text-slate-400 flex-shrink-0">
                       {notif.time.toLocaleTimeString('en-US', {
@@ -704,7 +740,7 @@ const Dashboard = () => {
                     <button
                       type="button"
                       onClick={() => handleEventSelection(evt)}
-                      className={`w-full text-left text-xs px-3 py-2 rounded-xl transition-colors flex items-center justify-between ${
+                      className={`w-full text-left text-xs px-3 py-2 rounded-xl transition-all flex items-center justify-between ${
                         isSelected
                           ? 'bg-slate-900 text-white font-semibold'
                           : 'text-slate-600 font-medium hover:bg-slate-100 hover:text-slate-900'

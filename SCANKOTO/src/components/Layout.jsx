@@ -68,7 +68,7 @@ const Layout = () => {
 
       {/* Primary Navigation Rail */}
       <aside
-        className={`fixed md:relative inset-y-0 left-0 z-50 bg-white border-r border-slate-200 flex flex-col flex-shrink-0 w-64 transition-transform duration-300 ease-in-out shadow-2xl md:shadow-none ${
+        className={`fixed md:relative inset-y-0 left-0 z-50 bg-white border-r border-slate-200 flex flex-col flex-shrink-0 w-64 transition-transform duration-300 ease-out shadow-2xl md:shadow-none ${
           isLeftPanelOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
         }`}
       >
@@ -100,13 +100,13 @@ const Layout = () => {
                   <Link
                     to={item.to}
                     onClick={closeSidebar}
-                    className={`flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-xs transition-colors ${
+                    className={`flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-xs transition-all active:scale-[0.99] ${
                       isActive
                         ? 'bg-slate-900 text-white font-semibold shadow-2xs'
                         : 'text-slate-600 font-medium hover:bg-slate-100 hover:text-slate-900'
                     }`}
                   >
-                    <span className={isActive ? 'text-emerald-400' : 'text-slate-400'}>
+                    <span className={`transition-colors ${isActive ? 'text-emerald-400' : 'text-slate-400'}`}>
                       {item.icon}
                     </span>
                     {item.label}
@@ -129,7 +129,7 @@ const Layout = () => {
             <button
               type="button"
               onClick={logout}
-              className="btn btn-ghost btn-xs btn-square text-slate-500 hover:text-rose-600 hover:bg-rose-50 ml-2 rounded-lg"
+              className="btn btn-ghost btn-xs btn-square text-slate-500 hover:text-rose-600 hover:bg-rose-50 active:scale-95 ml-2 rounded-lg transition-all"
               title="Sign Out"
             >
               <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">

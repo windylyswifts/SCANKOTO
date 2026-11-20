@@ -103,7 +103,7 @@ const ArchivedEvents = () => {
 
   return (
     <main className="flex-1 overflow-y-auto bg-slate-50/90 p-4 md:p-8 flex flex-col relative w-full pb-24 text-slate-900">
-      <div className="max-w-4xl mx-auto w-full">
+      <div className="max-w-4xl mx-auto w-full animate-panel-enter">
         <div className="mb-8">
           <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Archived Sessions</h1>
           <p className="text-xs text-slate-500 mt-0.5">
@@ -164,7 +164,7 @@ const ArchivedEvents = () => {
 
       {/* Archived Session Inspector Modal */}
       <dialog className={`modal ${selectedEvent ? 'modal-open' : ''}`}>
-        <div className="modal-box p-0 max-w-lg overflow-hidden bg-white rounded-3xl border border-slate-200">
+        <div className="modal-box p-0 max-w-lg overflow-hidden bg-white rounded-3xl border border-slate-200 animate-scale-in">
           <div className="bg-slate-900 p-6 text-white relative">
             <button
               type="button"
@@ -226,7 +226,7 @@ const ArchivedEvents = () => {
                 type="button"
                 onClick={() => handleExport(selectedEvent)}
                 disabled={exporting}
-                className="btn bg-slate-900 hover:bg-slate-800 text-white border-none w-full rounded-xl font-semibold text-xs"
+                className="btn bg-slate-900 hover:bg-slate-800 active:scale-[0.99] text-white border-none w-full rounded-xl font-semibold text-xs transition-transform"
               >
                 {exporting ? (
                   <span className="loading loading-spinner loading-sm"></span>
@@ -244,14 +244,14 @@ const ArchivedEvents = () => {
                 <button
                   type="button"
                   onClick={() => handleUnarchive(selectedEvent.event_id)}
-                  className="btn bg-slate-100 hover:bg-slate-200 flex-1 border-none text-slate-800 rounded-xl font-semibold text-xs"
+                  className="btn bg-slate-100 hover:bg-slate-200 active:scale-[0.98] flex-1 border-none text-slate-800 rounded-xl font-semibold text-xs transition-transform"
                 >
                   Restore Session
                 </button>
                 <button
                   type="button"
                   onClick={() => handleDelete(selectedEvent.event_id)}
-                  className="btn bg-rose-50 hover:bg-rose-600 border-none text-rose-700 hover:text-white flex-1 rounded-xl font-semibold text-xs"
+                  className="btn bg-rose-50 hover:bg-rose-600 active:scale-[0.98] border-none text-rose-700 hover:text-white flex-1 rounded-xl font-semibold text-xs transition-all"
                 >
                   Purge Record
                 </button>

@@ -306,7 +306,7 @@ const CreateEvent = () => {
 
   return (
     <main className="flex-1 overflow-y-auto p-4 md:p-8 w-full flex justify-center pb-24 bg-slate-50/90 text-slate-900">
-      <div className="w-full max-w-4xl space-y-6">
+      <div className="w-full max-w-4xl space-y-6 animate-panel-enter">
         {/* Top Header */}
         <header className="flex flex-col sm:flex-row sm:items-end justify-between gap-2">
           <div>
@@ -315,14 +315,14 @@ const CreateEvent = () => {
               Define session parameters, attendance thresholds, and roster masterlist.
             </p>
           </div>
-          <span className="text-[11px] font-mono bg-white border border-slate-200 px-3 py-1.5 rounded-xl text-slate-600 self-start sm:self-auto shadow-2xs">
+          <span className="text-[11px] font-mono bg-white border border-slate-200 px-3 py-1.5 rounded-xl text-slate-600 self-start sm:self-auto shadow-2xs transition-colors">
             SLUG // {eventIdSlug || 'awaiting-title'}
           </span>
         </header>
 
         {/* Global Error Banner */}
         {formError && (
-          <div className="bg-rose-50 border border-rose-200 text-rose-800 rounded-2xl p-4 flex items-start gap-3 text-xs font-medium">
+          <div className="bg-rose-50 border border-rose-200 text-rose-800 rounded-2xl p-4 flex items-start gap-3 text-xs font-medium animate-scan-reject">
             <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-rose-600 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
@@ -340,7 +340,7 @@ const CreateEvent = () => {
                   01 // Session Identity
                 </span>
                 {readiness.details && (
-                  <span className="text-[10px] font-mono font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
+                  <span className="text-[10px] font-mono font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md animate-scale-in">
                     READY
                   </span>
                 )}
@@ -378,7 +378,7 @@ const CreateEvent = () => {
                     02 // Active Time Window
                   </span>
                   {scheduleAnalysis.isValid && (
-                    <span className="text-[11px] font-mono font-semibold text-slate-700 bg-slate-100 px-2.5 py-0.5 rounded-md">
+                    <span className="text-[11px] font-mono font-semibold text-slate-700 bg-slate-100 px-2.5 py-0.5 rounded-md animate-scale-in">
                       SPAN: {formatDurationMinutes(scheduleAnalysis.totalMinutes)}
                     </span>
                   )}
@@ -391,7 +391,7 @@ const CreateEvent = () => {
                     </label>
                     <input
                       type="datetime-local"
-                      className="input input-sm h-10 input-bordered w-full bg-white border-slate-200 text-slate-900 text-xs font-mono focus:border-slate-900 focus:outline-none rounded-xl"
+                      className="input input-sm h-10 input-bordered w-full bg-white border-slate-200 text-slate-900 text-xs font-mono focus:border-slate-900 focus:outline-none rounded-xl transition-colors"
                       value={startTime}
                       onChange={(e) => {
                         setStartTime(e.target.value);
@@ -407,7 +407,7 @@ const CreateEvent = () => {
                     <input
                       type="datetime-local"
                       min={startTime || undefined}
-                      className={`input input-sm h-10 input-bordered w-full bg-white text-slate-900 text-xs font-mono focus:outline-none rounded-xl ${
+                      className={`input input-sm h-10 input-bordered w-full bg-white text-slate-900 text-xs font-mono focus:outline-none rounded-xl transition-colors ${
                         scheduleAnalysis.error
                           ? 'border-rose-400 focus:border-rose-600'
                           : 'border-slate-200 focus:border-slate-900'
@@ -421,7 +421,9 @@ const CreateEvent = () => {
                   </div>
 
                   {scheduleAnalysis.error && (
-                    <p className="text-[11px] font-medium text-rose-600">{scheduleAnalysis.error}</p>
+                    <p className="text-[11px] font-medium text-rose-600 animate-scale-in">
+                      {scheduleAnalysis.error}
+                    </p>
                   )}
                 </div>
               </section>
@@ -456,7 +458,7 @@ const CreateEvent = () => {
                   </label>
 
                   {isAttendanceRequired && (
-                    <div className="pt-3 border-t border-slate-200/80 space-y-3">
+                    <div className="pt-3 border-t border-slate-200/80 space-y-3 animate-panel-enter">
                       {/* Quick Presets */}
                       <div className="flex items-center gap-1.5">
                         <span className="text-[10px] font-mono uppercase text-slate-400 mr-1">
@@ -473,7 +475,7 @@ const CreateEvent = () => {
                                 setRenderHours(preset.hours);
                                 setRenderMinutes(preset.minutes);
                               }}
-                              className={`px-2.5 py-1 rounded-lg text-[11px] font-mono font-semibold transition-colors ${
+                              className={`px-2.5 py-1 rounded-lg text-[11px] font-mono font-semibold transition-all active:scale-95 ${
                                 isSelected
                                   ? 'bg-slate-900 text-white'
                                   : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'
@@ -521,7 +523,7 @@ const CreateEvent = () => {
                       </div>
 
                       {thresholdExceedsWindow && (
-                        <p className="text-[11px] font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
+                        <p className="text-[11px] font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 animate-scale-in">
                           Note: Required threshold ({formatDurationMinutes(requiredMinutes)}) is longer than the scheduled session window ({formatDurationMinutes(scheduleAnalysis.totalMinutes)}).
                         </p>
                       )}
@@ -550,9 +552,9 @@ const CreateEvent = () => {
 
               {!masterlistFile ? (
                 <div
-                  className={`relative border-2 border-dashed rounded-2xl p-8 flex flex-col items-center justify-center text-center transition-colors cursor-pointer ${
+                  className={`relative border-2 border-dashed rounded-2xl p-8 flex flex-col items-center justify-center text-center transition-all cursor-pointer ${
                     isDragActive
-                      ? 'border-slate-900 bg-slate-100'
+                      ? 'border-slate-900 bg-slate-100 scale-[1.01]'
                       : 'border-slate-300 bg-slate-50/70 hover:bg-slate-100/70'
                   }`}
                   onDragOver={(e) => {
@@ -586,7 +588,7 @@ const CreateEvent = () => {
                   </p>
                 </div>
               ) : (
-                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3">
+                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3 animate-panel-enter">
                   <div className="flex items-center justify-between gap-3">
                     <div className="flex items-center gap-3 overflow-hidden">
                       <div className="w-9 h-9 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 flex items-center justify-center flex-shrink-0 font-mono font-bold text-xs">
@@ -605,7 +607,7 @@ const CreateEvent = () => {
                     <button
                       type="button"
                       onClick={clearMasterlist}
-                      className="btn btn-xs bg-white hover:bg-rose-50 text-slate-600 hover:text-rose-700 border-slate-200 hover:border-rose-200 rounded-lg font-mono"
+                      className="btn btn-xs bg-white hover:bg-rose-50 active:scale-95 text-slate-600 hover:text-rose-700 border-slate-200 hover:border-rose-200 rounded-lg font-mono transition-transform"
                     >
                       Replace
                     </button>
@@ -645,7 +647,7 @@ const CreateEvent = () => {
               )}
 
               {csvError && (
-                <p className="text-xs font-medium text-rose-600 bg-rose-50 border border-rose-200 rounded-xl px-3.5 py-2.5">
+                <p className="text-xs font-medium text-rose-600 bg-rose-50 border border-rose-200 rounded-xl px-3.5 py-2.5 animate-scan-reject">
                   {csvError}
                 </p>
               )}
@@ -655,13 +657,13 @@ const CreateEvent = () => {
           {/* Readiness Checklist & Action Footer */}
           <div className="bg-slate-50 px-6 py-4 md:px-8 border-t border-slate-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="flex flex-wrap items-center gap-3 text-[11px] font-mono">
-              <span className={readiness.details ? 'text-emerald-700 font-semibold' : 'text-slate-400'}>
+              <span className={`transition-colors ${readiness.details ? 'text-emerald-700 font-semibold' : 'text-slate-400'}`}>
                 {readiness.details ? '✓' : '○'} Details
               </span>
-              <span className={readiness.schedule ? 'text-emerald-700 font-semibold' : 'text-slate-400'}>
+              <span className={`transition-colors ${readiness.schedule ? 'text-emerald-700 font-semibold' : 'text-slate-400'}`}>
                 {readiness.schedule ? '✓' : '○'} Schedule
               </span>
-              <span className={readiness.roster ? 'text-emerald-700 font-semibold' : 'text-slate-400'}>
+              <span className={`transition-colors ${readiness.roster ? 'text-emerald-700 font-semibold' : 'text-slate-400'}`}>
                 {readiness.roster ? '✓' : '○'} Roster ({parsedStudents.length})
               </span>
             </div>
@@ -677,7 +679,7 @@ const CreateEvent = () => {
               </button>
               <button
                 type="button"
-                className="btn btn-sm bg-slate-900 hover:bg-slate-800 disabled:bg-slate-200 text-white border-none px-6 h-10 rounded-xl font-semibold shadow-2xs"
+                className="btn btn-sm bg-slate-900 hover:bg-slate-800 active:scale-[0.98] disabled:bg-slate-200 text-white border-none px-6 h-10 rounded-xl font-semibold shadow-2xs transition-transform"
                 onClick={handleConfirmEvent}
                 disabled={isSubmitting || !isReadyToLaunch}
               >

@@ -102,7 +102,7 @@ const ManageEvents = () => {
 
   return (
     <main className="flex-1 overflow-y-auto bg-slate-50/90 p-4 md:p-8 flex flex-col relative w-full pb-24 text-slate-900">
-      <div className="max-w-6xl mx-auto w-full">
+      <div className="max-w-6xl mx-auto w-full animate-panel-enter">
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
           <div>
             <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Manage Sessions</h1>
@@ -114,7 +114,7 @@ const ManageEvents = () => {
           <input
             type="text"
             placeholder="Filter sessions by title or ID..."
-            className="input input-sm input-bordered w-full md:w-72 bg-white border-slate-200 text-slate-800 text-xs focus:border-slate-900 focus:outline-none rounded-xl shadow-2xs"
+            className="input input-sm input-bordered w-full md:w-72 bg-white border-slate-200 text-slate-800 text-xs focus:border-slate-900 focus:outline-none rounded-xl shadow-2xs transition-colors"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
           />
@@ -127,7 +127,7 @@ const ManageEvents = () => {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
             {filteredEvents.length === 0 && (
-              <div className="col-span-full text-center py-16 bg-white rounded-2xl border border-slate-200 shadow-2xs">
+              <div className="col-span-full text-center py-16 bg-white rounded-2xl border border-slate-200 shadow-2xs animate-scale-in">
                 <h3 className="text-sm font-mono uppercase tracking-wider font-semibold text-slate-400">
                   No active sessions found
                 </h3>
@@ -145,7 +145,7 @@ const ManageEvents = () => {
               return (
                 <div
                   key={evt.event_id}
-                  className="bg-white shadow-2xs border border-slate-200/90 rounded-2xl transition-all hover:border-slate-300 flex flex-col justify-between p-6"
+                  className="bg-white shadow-2xs border border-slate-200/90 rounded-2xl transition-all duration-200 hover:border-slate-300 hover:-translate-y-0.5 flex flex-col justify-between p-6"
                 >
                   <div>
                     <div className="flex justify-between items-center mb-3">
@@ -185,7 +185,7 @@ const ManageEvents = () => {
                       <button
                         type="button"
                         onClick={() => handleArchive(evt.event_id, evt.event_name)}
-                        className="btn btn-xs btn-square bg-slate-100 hover:bg-slate-900 text-slate-700 hover:text-white border-none rounded-lg"
+                        className="btn btn-xs btn-square bg-slate-100 hover:bg-slate-900 active:scale-95 text-slate-700 hover:text-white border-none rounded-lg transition-all"
                         title="Archive Session"
                       >
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -196,7 +196,7 @@ const ManageEvents = () => {
                       <button
                         type="button"
                         onClick={() => handleDelete(evt.event_id, evt.event_name)}
-                        className="btn btn-xs btn-square bg-rose-50 hover:bg-rose-600 text-rose-600 hover:text-white border-none rounded-lg"
+                        className="btn btn-xs btn-square bg-rose-50 hover:bg-rose-600 active:scale-95 text-rose-600 hover:text-white border-none rounded-lg transition-all"
                         title="Delete Session"
                       >
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">

@@ -286,6 +286,7 @@ const AttendanceScanner = () => {
 
         setScanResult({
           type: 'Throttled',
+          tone: 'warning',
           studentId: studentIdClean,
           studentName: 'N/A',
           timestamp: formattedTime,
@@ -352,6 +353,7 @@ const AttendanceScanner = () => {
 
         resultPayload = {
           type: 'Check-In',
+          tone: isAnomaly ? 'danger' : 'success',
           studentId: studentIdClean,
           studentName,
           timestamp: formattedTime,
@@ -370,15 +372,18 @@ const AttendanceScanner = () => {
         let finalStatus = '';
         let badgeColor = '';
         let message = '';
+        let tone = 'success';
 
         if (isAnomaly) {
           finalStatus = 'Anomaly / Checked-Out';
           badgeColor = 'bg-rose-50 text-rose-600';
+          tone = 'danger';
           message = 'Anomaly Check-Out Logged. Manual review required by host.';
         } else {
           const isValid = elapsedMinutes >= minDurationMinutes;
           finalStatus = isValid ? 'Completed / Valid' : 'Incomplete / Invalid';
           badgeColor = isValid ? 'bg-emerald-50 text-emerald-600' : 'bg-amber-50 text-amber-600';
+          tone = isValid ? 'success' : 'warning';
           message = isValid
             ? `Check-Out Validated (${elapsedMinutes}m / ${minDurationMinutes}m required)`
             : `Early Check-Out (${elapsedMinutes}m / ${minDurationMinutes}m required)`;
@@ -399,6 +404,7 @@ const AttendanceScanner = () => {
 
         resultPayload = {
           type: 'Check-Out',
+          tone,
           studentId: studentIdClean,
           studentName: updatedLog.studentName,
           timestamp: formattedTime,
@@ -411,6 +417,7 @@ const AttendanceScanner = () => {
       } else {
         resultPayload = {
           type: 'Completed',
+          tone: 'info',
           studentId: studentIdClean,
           studentName: existingLog.studentName || studentName,
           timestamp: formattedTime,
@@ -452,16 +459,26 @@ const AttendanceScanner = () => {
     setFacingMode((prevMode) => (prevMode === 'environment' ? 'user' : 'environment'));
   };
 
+  const viewfinderReticleColor = isEventEnded
+    ? 'border-rose-500/80'
+    : scanResult?.tone === 'success'
+    ? 'border-emerald-400'
+    : scanResult?.tone === 'danger'
+    ? 'border-rose-400'
+    : scanResult?.tone === 'warning'
+    ? 'border-amber-400'
+    : 'border-sky-400 animate-reticle-breathe';
+
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4 text-slate-900">
-      <div className="w-full max-w-md bg-white shadow-sm border border-slate-200/90 rounded-3xl p-6 relative overflow-hidden">
+      <div className="w-full max-w-md bg-white shadow-sm border border-slate-200/90 rounded-3xl p-6 relative overflow-hidden animate-panel-enter">
         {/* Top Terminal Header */}
         <div className="w-full flex justify-between items-center mb-4">
           <div className="text-left">
             <div className="flex items-center gap-2">
               <h2 className="text-xl font-bold text-slate-900 tracking-tight">SCANKOTO</h2>
               <span
-                className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold border ${
+                className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold border transition-colors ${
                   networkStatus === 'online'
                     ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                     : 'bg-rose-50 text-rose-700 border-rose-200'
@@ -477,7 +494,7 @@ const AttendanceScanner = () => {
             </div>
 
             {pendingCount > 0 && (
-              <div className="mt-1">
+              <div className="mt-1 animate-scale-in">
                 <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-mono font-semibold bg-amber-50 text-amber-700 border border-amber-200">
                   {isSyncing && <span className="loading loading-spinner loading-xs mr-1"></span>}
                   {pendingCount} QUEUED FOR SYNC
@@ -489,7 +506,7 @@ const AttendanceScanner = () => {
           <button
             type="button"
             onClick={toggleCamera}
-            className="btn btn-sm btn-circle bg-slate-100 hover:bg-slate-200 text-slate-800 border-none"
+            className="btn btn-sm btn-circle bg-slate-100 hover:bg-slate-200 active:scale-95 text-slate-800 border-none transition-transform"
             title="Switch Camera"
             disabled={!isScanning || isEventEnded}
           >
@@ -515,7 +532,7 @@ const AttendanceScanner = () => {
             type="button"
             onClick={handlePreCache}
             disabled={isCaching || networkStatus === 'offline' || isEventEnded}
-            className="btn btn-xs bg-slate-900 hover:bg-slate-800 text-white border-none rounded-lg font-mono"
+            className="btn btn-xs bg-slate-900 hover:bg-slate-800 active:scale-95 text-white border-none rounded-lg font-mono transition-transform"
           >
             {isCaching ? <span className="loading loading-spinner loading-xs"></span> : 'SYNC CACHE'}
           </button>
@@ -524,13 +541,31 @@ const AttendanceScanner = () => {
         {/* Optical Viewfinder Frame */}
         <div className="w-full aspect-square rounded-2xl overflow-hidden border border-slate-200 bg-slate-950 relative flex items-center justify-center">
           {/* Optical Corner Reticles */}
-          <span className="pointer-events-none absolute top-3 left-3 z-10 w-5 h-5 border-t-2 border-l-2 border-white/75 rounded-tl-xs" />
-          <span className="pointer-events-none absolute top-3 right-3 z-10 w-5 h-5 border-t-2 border-r-2 border-white/75 rounded-tr-xs" />
-          <span className="pointer-events-none absolute bottom-3 left-3 z-10 w-5 h-5 border-b-2 border-l-2 border-white/75 rounded-bl-xs" />
-          <span className="pointer-events-none absolute bottom-3 right-3 z-10 w-5 h-5 border-b-2 border-r-2 border-white/75 rounded-br-xs" />
+          <span
+            className={`pointer-events-none absolute top-3.5 left-3.5 z-20 w-6 h-6 border-t-2 border-l-2 rounded-tl-xs transition-colors duration-300 ${viewfinderReticleColor}`}
+          />
+          <span
+            className={`pointer-events-none absolute top-3.5 right-3.5 z-20 w-6 h-6 border-t-2 border-r-2 rounded-tr-xs transition-colors duration-300 ${viewfinderReticleColor}`}
+          />
+          <span
+            className={`pointer-events-none absolute bottom-3.5 left-3.5 z-20 w-6 h-6 border-b-2 border-l-2 rounded-bl-xs transition-colors duration-300 ${viewfinderReticleColor}`}
+          />
+          <span
+            className={`pointer-events-none absolute bottom-3.5 right-3.5 z-20 w-6 h-6 border-b-2 border-r-2 rounded-br-xs transition-colors duration-300 ${viewfinderReticleColor}`}
+          />
+
+          {/* Live Optical Laser Sweep while Camera is Scanning */}
+          {isScanning && !isEventEnded && (
+            <div className="pointer-events-none absolute inset-x-4 inset-y-4 z-10 overflow-hidden">
+              <div className="w-full h-full animate-optical-sweep">
+                <div className="w-full h-0.5 bg-gradient-to-r from-transparent via-sky-400 to-transparent shadow-[0_0_12px_rgba(56,189,248,0.85)]" />
+                <div className="w-full h-8 bg-gradient-to-b from-sky-400/15 to-transparent" />
+              </div>
+            </div>
+          )}
 
           {isEventEnded ? (
-            <div className="text-white flex flex-col items-center text-center p-6">
+            <div className="text-white flex flex-col items-center text-center p-6 animate-scale-in">
               <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 mb-3 text-rose-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
               </svg>
@@ -550,12 +585,12 @@ const AttendanceScanner = () => {
               }}
               onError={(error) => console.error(error?.message)}
               constraints={{ facingMode }}
-              components={{ audio: false, onOff: true, finder: true }}
+              components={{ audio: false, onOff: true, finder: false }}
             />
           ) : (
-            <div className="text-slate-300 flex flex-col items-center">
+            <div className="text-sky-300 flex flex-col items-center animate-scale-in">
               <span className="loading loading-spinner loading-md mb-2"></span>
-              <span className="text-xs font-mono uppercase tracking-wider">Processing Scan...</span>
+              <span className="text-xs font-mono uppercase tracking-wider">Verifying ID...</span>
             </div>
           )}
         </div>
@@ -564,7 +599,7 @@ const AttendanceScanner = () => {
         <div className="w-full mt-5">
           <button
             type="button"
-            className="btn bg-slate-900 hover:bg-slate-800 text-white border-none w-full rounded-xl font-semibold text-sm shadow-2xs"
+            className="btn bg-slate-900 hover:bg-slate-800 active:scale-[0.99] text-white border-none w-full rounded-xl font-semibold text-sm shadow-2xs transition-transform"
             onClick={() => setIsManualModalOpen(true)}
             disabled={!isScanning || isEventEnded}
           >
@@ -582,7 +617,7 @@ const AttendanceScanner = () => {
 
       {/* Scan Verification Feedback Modal */}
       <dialog className={`modal modal-bottom sm:modal-middle ${scanResult ? 'modal-open' : ''}`}>
-        <div className="modal-box text-center rounded-3xl border border-slate-200 bg-white">
+        <div className="modal-box text-center rounded-3xl border border-slate-200 bg-white animate-scale-in">
           <div
             className={`w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-4 ${
               scanResult?.badgeColor || 'bg-amber-50 text-amber-600'
@@ -626,7 +661,7 @@ const AttendanceScanner = () => {
           <div className="modal-action mt-0 justify-center">
             <button
               type="button"
-              className="btn bg-slate-900 hover:bg-slate-800 text-white border-none btn-wide rounded-xl font-semibold"
+              className="btn bg-slate-900 hover:bg-slate-800 active:scale-[0.98] text-white border-none btn-wide rounded-xl font-semibold transition-transform"
               onClick={resetScanner}
             >
               Scan Next
@@ -637,7 +672,7 @@ const AttendanceScanner = () => {
 
       {/* Manual Entry Modal */}
       <dialog className={`modal ${isManualModalOpen ? 'modal-open' : ''}`}>
-        <div className="modal-box rounded-3xl border border-slate-200 bg-white">
+        <div className="modal-box rounded-3xl border border-slate-200 bg-white animate-scale-in">
           <h3 className="font-bold text-lg text-slate-900">Manual ID Input</h3>
           <p className="py-2 text-xs text-slate-500">
             Enter the Student ID below if the QR code is damaged or unreadable.
@@ -661,7 +696,7 @@ const AttendanceScanner = () => {
             </button>
             <button
               type="button"
-              className="btn btn-sm bg-slate-900 hover:bg-slate-800 text-white border-none rounded-xl px-5"
+              className="btn btn-sm bg-slate-900 hover:bg-slate-800 active:scale-95 text-white border-none rounded-xl px-5 transition-transform"
               onClick={handleManualSubmit}
             >
               Log Scan
