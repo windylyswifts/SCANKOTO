@@ -23,6 +23,37 @@
   }
 }
 
+@keyframes optical-sweep {
+  0% {
+    transform: translateY(0%);
+  }
+  100% {
+    transform: translateY(96%);
+  }
+}
+
+@keyframes scan-reject {
+  0%, 100% {
+    transform: translateX(0);
+  }
+  20%, 60% {
+    transform: translateX(-5px);
+  }
+  40%, 80% {
+    transform: translateX(5px);
+  }
+}
+
 .animate-scale-in {
   animation: scale-in 0.16s ease-out forwards;
+}
+
+.animate-optical-sweep {
+  will-change: transform;
+  animation: optical-sweep 0.95s cubic-bezier(0.4, 0, 0.2, 1) infinite alternate;
+}
+
+.animate-scan-reject {
+  will-change: transform;
+  animation: scan-reject 0.36s ease-in-out;
 }
