@@ -5,8 +5,9 @@ import { supabase } from '../utils/supabaseClient';
 const DURATION_PRESETS = [
   { label: '30m', hours: 0, minutes: 30 },
   { label: '1h', hours: 1, minutes: 0 },
-  { label: '2h', hours: 2, minutes: 0 },
-  { label: '3h', hours: 3, minutes: 0 }
+  { label: '4h', hours: 4, minutes: 0 },
+  { label: '8h', hours: 8, minutes: 0 },
+  { label: '24h', hours: 24, minutes: 0 }
 ];
 
 const SAMPLE_CSV_CONTENT = [
@@ -80,13 +81,22 @@ const parseCSVToStudentObjects = (text) => {
   return Array.from(uniqueStudents.values());
 };
 
-const formatDurationMinutes = (totalMins) => {
+const formatDurationMinutes = (totalMins, includeDays = false) => {
   if (!totalMins || totalMins <= 0) return '0m';
-  const hrs = Math.floor(totalMins / 60);
+
+  const totalHours = Math.floor(totalMins / 60);
   const mins = totalMins % 60;
-  if (hrs === 0) return `${mins}m`;
-  if (mins === 0) return `${hrs}h`;
-  return `${hrs}h ${mins}m`;
+
+  if (includeDays && totalHours >= 24) {
+    const days = Math.floor(totalHours / 24);
+    const remHours = totalHours % 24;
+    const dayPart = remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
+    return `${dayPart} (${totalHours}h${mins > 0 ? ` ${mins}m` : ''})`;
+  }
+
+  if (totalHours === 0) return `${mins}m`;
+  if (mins === 0) return `${totalHours}h`;
+  return `${totalHours}h ${mins}m`;
 };
 
 const CreateEvent = () => {
@@ -141,6 +151,12 @@ const CreateEvent = () => {
   }, [startTime, endTime]);
 
   const requiredMinutes = isAttendanceRequired ? renderHours * 60 + renderMinutes : 0;
+
+  const isThresholdValid =
+    !isAttendanceRequired ||
+    !scheduleAnalysis.isValid ||
+    requiredMinutes <= scheduleAnalysis.totalMinutes;
+
   const thresholdExceedsWindow =
     isAttendanceRequired &&
     scheduleAnalysis.isValid &&
@@ -149,11 +165,21 @@ const CreateEvent = () => {
   const readiness = {
     details: Boolean(eventName.trim() && eventDescription.trim()),
     schedule: scheduleAnalysis.isValid,
+    threshold: isThresholdValid,
     roster: parsedStudents.length > 0
   };
-  const isReadyToLaunch = readiness.details && readiness.schedule && readiness.roster;
+
+  const isReadyToLaunch =
+    readiness.details && readiness.schedule && readiness.threshold && readiness.roster;
 
   // --- Handlers ---
+  const handleFitThresholdToWindow = () => {
+    if (!scheduleAnalysis.isValid) return;
+    setRenderHours(Math.floor(scheduleAnalysis.totalMinutes / 60));
+    setRenderMinutes(scheduleAnalysis.totalMinutes % 60);
+    if (formError) setFormError('');
+  };
+
   const handleDownloadSampleCsv = () => {
     const blob = new Blob([SAMPLE_CSV_CONTENT], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -228,6 +254,12 @@ const CreateEvent = () => {
     }
     if (!startTime || !endTime || !scheduleAnalysis.isValid) {
       setFormError(scheduleAnalysis.error || 'Please configure a valid Start and End time window.');
+      return;
+    }
+    if (thresholdExceedsWindow) {
+      setFormError(
+        `Required render duration (${formatDurationMinutes(requiredMinutes)}) cannot exceed the total event timeline (${formatDurationMinutes(scheduleAnalysis.totalMinutes, true)}).`
+      );
       return;
     }
     if (parsedStudents.length === 0) {
@@ -379,7 +411,7 @@ const CreateEvent = () => {
                   </span>
                   {scheduleAnalysis.isValid && (
                     <span className="text-[11px] font-mono font-semibold text-slate-700 bg-slate-100 px-2.5 py-0.5 rounded-md animate-scale-in">
-                      SPAN: {formatDurationMinutes(scheduleAnalysis.totalMinutes)}
+                      SPAN: {formatDurationMinutes(scheduleAnalysis.totalMinutes, true)}
                     </span>
                   )}
                 </div>
@@ -428,18 +460,30 @@ const CreateEvent = () => {
                 </div>
               </section>
 
-              {/* Step 3: Clearance Threshold (Inline Controls + Presets) */}
+              {/* Step 3: Clearance Threshold (Uncapped Hours + Timeline Guard) */}
               <section className="space-y-4">
                 <div className="flex items-center justify-between">
                   <span className="text-[10px] font-mono font-bold uppercase tracking-widest text-slate-400">
                     03 // Clearance Threshold
                   </span>
-                  <span className="text-[11px] font-mono font-semibold text-slate-700 bg-slate-100 px-2.5 py-0.5 rounded-md">
+                  <span
+                    className={`text-[11px] font-mono font-semibold px-2.5 py-0.5 rounded-md transition-colors ${
+                      thresholdExceedsWindow
+                        ? 'bg-rose-100 text-rose-700'
+                        : 'bg-slate-100 text-slate-700'
+                    }`}
+                  >
                     {isAttendanceRequired ? `REQ: ${formatDurationMinutes(requiredMinutes)}` : 'NO MIN'}
                   </span>
                 </div>
 
-                <div className="p-4 bg-slate-50/80 rounded-2xl border border-slate-200/80 space-y-4">
+                <div
+                  className={`p-4 rounded-2xl border space-y-4 transition-colors ${
+                    thresholdExceedsWindow
+                      ? 'bg-rose-50/40 border-rose-300'
+                      : 'bg-slate-50/80 border-slate-200/80'
+                  }`}
+                >
                   <label className="flex items-center justify-between cursor-pointer">
                     <div>
                       <span className="text-xs font-bold text-slate-900 block">
@@ -453,14 +497,17 @@ const CreateEvent = () => {
                       type="checkbox"
                       className="toggle toggle-sm checked:bg-slate-900 checked:border-slate-900"
                       checked={isAttendanceRequired}
-                      onChange={(e) => setIsAttendanceRequired(e.target.checked)}
+                      onChange={(e) => {
+                        setIsAttendanceRequired(e.target.checked);
+                        if (formError) setFormError('');
+                      }}
                     />
                   </label>
 
                   {isAttendanceRequired && (
                     <div className="pt-3 border-t border-slate-200/80 space-y-3 animate-panel-enter">
                       {/* Quick Presets */}
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex flex-wrap items-center gap-1.5">
                         <span className="text-[10px] font-mono uppercase text-slate-400 mr-1">
                           Presets:
                         </span>
@@ -474,6 +521,7 @@ const CreateEvent = () => {
                               onClick={() => {
                                 setRenderHours(preset.hours);
                                 setRenderMinutes(preset.minutes);
+                                if (formError) setFormError('');
                               }}
                               className={`px-2.5 py-1 rounded-lg text-[11px] font-mono font-semibold transition-all active:scale-95 ${
                                 isSelected
@@ -487,7 +535,7 @@ const CreateEvent = () => {
                         })}
                       </div>
 
-                      {/* Inline Hours & Minutes Inputs */}
+                      {/* Inline Hours (Uncapped) & Minutes Inputs */}
                       <div className="grid grid-cols-2 gap-3">
                         <div className="bg-white border border-slate-200 rounded-xl px-3 py-2 flex items-center justify-between">
                           <span className="text-[11px] font-mono font-semibold text-slate-500">
@@ -496,12 +544,14 @@ const CreateEvent = () => {
                           <input
                             type="number"
                             min="0"
-                            max="24"
-                            className="w-16 text-right font-mono font-bold text-sm text-slate-900 focus:outline-none"
+                            step="1"
+                            className="w-20 text-right font-mono font-bold text-sm text-slate-900 focus:outline-none"
                             value={renderHours}
-                            onChange={(e) =>
-                              setRenderHours(Math.max(0, Math.min(24, Number(e.target.value))))
-                            }
+                            onChange={(e) => {
+                              const parsed = parseInt(e.target.value, 10);
+                              setRenderHours(Number.isNaN(parsed) ? 0 : Math.max(0, parsed));
+                              if (formError) setFormError('');
+                            }}
                           />
                         </div>
 
@@ -513,19 +563,39 @@ const CreateEvent = () => {
                             type="number"
                             min="0"
                             max="59"
+                            step="1"
                             className="w-16 text-right font-mono font-bold text-sm text-slate-900 focus:outline-none"
                             value={renderMinutes}
-                            onChange={(e) =>
-                              setRenderMinutes(Math.max(0, Math.min(59, Number(e.target.value))))
-                            }
+                            onChange={(e) => {
+                              const parsed = parseInt(e.target.value, 10);
+                              setRenderMinutes(
+                                Number.isNaN(parsed) ? 0 : Math.max(0, Math.min(59, parsed))
+                              );
+                              if (formError) setFormError('');
+                            }}
                           />
                         </div>
                       </div>
 
-                      {thresholdExceedsWindow && (
-                        <p className="text-[11px] font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 animate-scale-in">
-                          Note: Required threshold ({formatDurationMinutes(requiredMinutes)}) is longer than the scheduled session window ({formatDurationMinutes(scheduleAnalysis.totalMinutes)}).
+                      {scheduleAnalysis.isValid && !thresholdExceedsWindow && (
+                        <p className="text-[11px] font-mono text-slate-500">
+                          MAX ALLOWED BY TIMELINE: {formatDurationMinutes(scheduleAnalysis.totalMinutes, true)}
                         </p>
+                      )}
+
+                      {thresholdExceedsWindow && (
+                        <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 flex items-center justify-between gap-2 animate-scale-in">
+                          <p className="text-[11px] font-medium text-rose-700 leading-snug">
+                            Exceeds event timeline ({formatDurationMinutes(scheduleAnalysis.totalMinutes, true)} max).
+                          </p>
+                          <button
+                            type="button"
+                            onClick={handleFitThresholdToWindow}
+                            className="btn btn-xs bg-rose-600 hover:bg-rose-700 text-white border-none rounded-lg font-mono flex-shrink-0"
+                          >
+                            Fit to Window
+                          </button>
+                        </div>
                       )}
                     </div>
                   )}
@@ -662,6 +732,15 @@ const CreateEvent = () => {
               </span>
               <span className={`transition-colors ${readiness.schedule ? 'text-emerald-700 font-semibold' : 'text-slate-400'}`}>
                 {readiness.schedule ? '✓' : '○'} Schedule
+              </span>
+              <span
+                className={`transition-colors ${
+                  !readiness.threshold
+                    ? 'text-rose-600 font-semibold'
+                    : 'text-emerald-700 font-semibold'
+                }`}
+              >
+                {readiness.threshold ? '✓' : '✕'} Threshold
               </span>
               <span className={`transition-colors ${readiness.roster ? 'text-emerald-700 font-semibold' : 'text-slate-400'}`}>
                 {readiness.roster ? '✓' : '○'} Roster ({parsedStudents.length})

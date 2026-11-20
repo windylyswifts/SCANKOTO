@@ -61,6 +61,11 @@ const Dashboard = () => {
   const [isRightPanelOpenMobile, setIsRightPanelOpenMobile] = useState(false);
   const [isRightPanelOpenDesktop, setIsRightPanelOpenDesktop] = useState(true);
 
+  // --- Session Lock Modal State ---
+  const [isStopModalOpen, setIsStopModalOpen] = useState(false);
+  const [isStoppingEvent, setIsStoppingEvent] = useState(false);
+  const [stopError, setStopError] = useState('');
+
   const highlightTimerRef = useRef(null);
   const seededEventIdRef = useRef(null);
   const knownLogStatesRef = useRef(new Map());
@@ -73,6 +78,19 @@ const Dashboard = () => {
       if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
     };
   }, []);
+
+  // Close Stop Modal on Escape key when idle
+  useEffect(() => {
+    if (!isStopModalOpen) return;
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && !isStoppingEvent) {
+        setIsStopModalOpen(false);
+        setStopError('');
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isStopModalOpen, isStoppingEvent]);
 
   // 1. Load non-archived events on mount
   useEffect(() => {
@@ -290,13 +308,23 @@ const Dashboard = () => {
     setTimeout(() => setCopiedKey(null), 2000);
   };
 
-  const handleStopEvent = async () => {
+  const openStopModal = () => {
     if (!activeEventId || isEventEnded) return;
+    setStopError('');
+    setIsStopModalOpen(true);
+  };
 
-    const confirmed = window.confirm(
-      `Are you sure you want to STOP "${activeEventName}"?\n\nThis will instantly lock the event and disable all field scanners. Exporting will remain active.`
-    );
-    if (!confirmed) return;
+  const closeStopModal = () => {
+    if (isStoppingEvent) return;
+    setIsStopModalOpen(false);
+    setStopError('');
+  };
+
+  const handleConfirmStopEvent = async () => {
+    if (!activeEventId || isEventEnded || isStoppingEvent) return;
+
+    setIsStoppingEvent(true);
+    setStopError('');
 
     const now = new Date().toISOString();
     const { error } = await supabase
@@ -304,8 +332,10 @@ const Dashboard = () => {
       .update({ end_time: now })
       .eq('event_id', activeEventId);
 
+    setIsStoppingEvent(false);
+
     if (error) {
-      alert('Failed to stop event: ' + error.message);
+      setStopError(error.message || 'Unable to lock session. Please try again.');
       return;
     }
 
@@ -323,6 +353,7 @@ const Dashboard = () => {
         ...prev
       ].slice(0, MAX_NOTIFICATIONS)
     );
+    setIsStopModalOpen(false);
   };
 
   const handleEmailReport = (emailAddress) => {
@@ -578,7 +609,7 @@ const Dashboard = () => {
                 <button
                   type="button"
                   disabled={!activeEventId || isEventEnded}
-                  onClick={handleStopEvent}
+                  onClick={openStopModal}
                   className={`btn btn-xs rounded-lg font-mono uppercase tracking-wider px-3.5 h-8 transition-all ${
                     isEventEnded || !activeEventId
                       ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
@@ -818,6 +849,98 @@ const Dashboard = () => {
           </div>
         </aside>
       </div>
+
+      {/* Session Gate Lock Confirmation Modal */}
+      {isStopModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/45 backdrop-blur-[2px] transition-opacity"
+          onClick={closeStopModal}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="stop-session-title"
+        >
+          <div
+            className={`w-full max-w-md bg-white border border-slate-200/90 rounded-3xl p-6 md:p-7 shadow-2xl relative overflow-hidden animate-scale-in ${
+              stopError ? 'animate-scan-reject border-rose-300' : ''
+            }`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Optical Viewfinder Corner Reticles */}
+            <span className="pointer-events-none absolute top-3.5 left-3.5 w-3.5 h-3.5 border-t-2 border-l-2 border-rose-500/45 rounded-tl-xs" />
+            <span className="pointer-events-none absolute top-3.5 right-3.5 w-3.5 h-3.5 border-t-2 border-r-2 border-rose-500/45 rounded-tr-xs" />
+            <span className="pointer-events-none absolute bottom-3.5 left-3.5 w-3.5 h-3.5 border-b-2 border-l-2 border-rose-500/45 rounded-bl-xs" />
+            <span className="pointer-events-none absolute bottom-3.5 right-3.5 w-3.5 h-3.5 border-b-2 border-r-2 border-rose-500/45 rounded-br-xs" />
+
+            {/* Header */}
+            <div className="flex items-start gap-3.5 mb-4">
+              <div className="w-11 h-11 rounded-2xl bg-rose-50 border border-rose-200 text-rose-600 flex items-center justify-center flex-shrink-0">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                </svg>
+              </div>
+              <div className="overflow-hidden">
+                <span className="text-[10px] font-mono font-bold uppercase tracking-widest text-rose-600 block">
+                  GATE OVERRIDE // IRREVERSIBLE
+                </span>
+                <h2 id="stop-session-title" className="text-lg font-bold text-slate-900 tracking-tight truncate">
+                  Stop & Lock Session?
+                </h2>
+              </div>
+            </div>
+
+            {/* Target Session Snapshot */}
+            <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-3.5 mb-4 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-bold text-slate-900 truncate">{activeEventName}</span>
+                <span className="text-[10px] font-mono text-slate-500 bg-white border border-slate-200 px-2 py-0.5 rounded-md flex-shrink-0">
+                  {telemetry.total}/{expectedCount} SCANS
+                </span>
+              </div>
+              <p className="text-[11px] font-mono text-slate-400 truncate">
+                ID // {activeEventId}
+              </p>
+            </div>
+
+            <p className="text-xs text-slate-600 leading-relaxed mb-5">
+              This will immediately lock <strong className="text-slate-900">{activeEventName}</strong> and disable all active field QR scanners. Spreadsheet exporting (<span className="font-mono text-[11px]">XLSX</span>) and the verification portal will remain accessible.
+            </p>
+
+            {/* Inline Error Alert */}
+            {stopError && (
+              <div className="bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium rounded-xl p-3 mb-4 animate-scale-in">
+                {stopError}
+              </div>
+            )}
+
+            {/* Action Buttons */}
+            <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={closeStopModal}
+                disabled={isStoppingEvent}
+                className="btn btn-sm btn-ghost text-slate-600 hover:bg-slate-100 rounded-xl font-semibold text-xs px-4"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmStopEvent}
+                disabled={isStoppingEvent}
+                className="btn btn-sm bg-rose-600 hover:bg-rose-700 active:scale-[0.98] disabled:bg-rose-300 text-white border-none rounded-xl font-semibold text-xs px-5 shadow-2xs transition-all gap-1.5"
+              >
+                {isStoppingEvent ? (
+                  <>
+                    <span className="loading loading-spinner loading-xs"></span>
+                    Locking Gate...
+                  </>
+                ) : (
+                  'Confirm & Lock Session'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
