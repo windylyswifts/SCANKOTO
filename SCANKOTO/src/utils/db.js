@@ -141,28 +141,30 @@ export const cacheEventData = async (eventId) => {
     const [{ data: eventData, error: eventError }, { data: rosterRows, error: rosterError }] =
       await Promise.all([
         supabase.from('events').select('*').eq('event_id', eventId).single(),
-        supabase.from('event_roster').select('student_id, students (*)').eq('event_id', eventId)
+        supabase
+          .from('event_roster')
+          .select(
+            'student_id, full_name, course, year_level, students (student_id, full_name, course, year_level, email, qr_hash)'
+          )
+          .eq('event_id', eventId)
       ]);
 
     if (eventError) throw eventError;
     if (rosterError) throw rosterError;
 
-    let rawStudents = (rosterRows || []).map((row) => row.students).filter(Boolean);
-
-    // Fallback for legacy events created before event_roster existed
-    if (rawStudents.length === 0 && (eventData?.expected_headcount || 0) > 0) {
-      const { data: legacyStudents, error: legacyError } = await supabase
-        .from('students')
-        .select('*');
-      if (legacyError) throw legacyError;
-      rawStudents = legacyStudents || [];
-    }
-
+    // Strictly scoped to this event's event_roster rows (never pulls global students table)
     const validStudentMap = new Map();
-    rawStudents.forEach((student) => {
-      if (student?.student_id && student.qr_hash !== 'anomaly') {
-        validStudentMap.set(student.student_id, {
-          ...student,
+    (rosterRows || []).forEach((row) => {
+      const profile = row.students || {};
+      const studentId = row.student_id || profile.student_id;
+      if (studentId && profile.qr_hash !== 'anomaly') {
+        validStudentMap.set(studentId, {
+          student_id: studentId,
+          full_name: row.full_name || profile.full_name || 'Unknown Student',
+          course: row.course || profile.course || 'Unknown',
+          year_level: row.year_level || profile.year_level || 'N/A',
+          email: profile.email || '',
+          qr_hash: profile.qr_hash || '',
           cachedEventId: eventId
         });
       }
@@ -201,11 +203,10 @@ export const getEventCacheStatus = async (eventId) => {
       const validStudents = (studentsReq.result || []).filter(
         (s) => s.qr_hash !== 'anomaly' && s.cachedEventId === eventId
       );
-      const isEventCached = Boolean(localEvent && validStudents.length > 0);
 
       resolve({
-        isCached: isEventCached,
-        count: isEventCached ? validStudents.length : 0,
+        isCached: Boolean(localEvent),
+        count: validStudents.length,
         event: localEvent
       });
     };

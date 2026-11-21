@@ -328,7 +328,7 @@ const CreateEvent = () => {
         );
       }
 
-      // Replace and link only this session's specific student roster in event_roster
+      // Reset and write this session's segregated roster into event_roster
       const { error: clearRosterError } = await supabase
         .from('event_roster')
         .delete()
@@ -340,7 +340,10 @@ const CreateEvent = () => {
 
       const rosterLinks = parsedStudents.map((student) => ({
         event_id: eventIdSlug,
-        student_id: student.student_id
+        student_id: student.student_id,
+        full_name: student.full_name,
+        course: student.course,
+        year_level: student.year_level
       }));
 
       const { error: rosterLinkError } = await supabase

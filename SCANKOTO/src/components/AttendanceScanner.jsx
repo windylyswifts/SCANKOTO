@@ -291,13 +291,14 @@ const AttendanceScanner = () => {
     }
   }, []);
 
+  // 5. Segregated Per-Event Student Lookup (Local Cache -> Event Roster)
   const resolveStudentInfo = async (studentIdClean) => {
     try {
       const localStudent = await getLocalStudent(studentIdClean);
       if (
         localStudent?.full_name &&
         localStudent.qr_hash !== 'anomaly' &&
-        (!localStudent.cachedEventId || localStudent.cachedEventId === activeEvent)
+        localStudent.cachedEventId === activeEvent
       ) {
         return { studentName: localStudent.full_name, isAnomaly: false };
       }
@@ -305,14 +306,17 @@ const AttendanceScanner = () => {
       if (navigator.onLine) {
         const { data: rosterEntry } = await supabase
           .from('event_roster')
-          .select('student_id, students (full_name, qr_hash)')
+          .select('student_id, full_name, students (full_name, qr_hash)')
           .eq('event_id', activeEvent)
           .eq('student_id', studentIdClean)
           .maybeSingle();
 
-        const studentProfile = rosterEntry?.students;
-        if (studentProfile?.full_name && studentProfile.qr_hash !== 'anomaly') {
-          return { studentName: studentProfile.full_name, isAnomaly: false };
+        if (rosterEntry && rosterEntry.students?.qr_hash !== 'anomaly') {
+          return {
+            studentName:
+              rosterEntry.full_name || rosterEntry.students?.full_name || 'Unknown Student',
+            isAnomaly: false
+          };
         }
       }
     } catch (err) {
@@ -625,7 +629,7 @@ const AttendanceScanner = () => {
             </div>
             <span className="text-xs font-medium text-slate-700 block truncate">
               {isCaching
-                ? 'Syncing clean roster...'
+                ? 'Syncing session roster...'
                 : cachedStudentCount !== null
                 ? `${cachedStudentCount} valid roster records cached`
                 : 'Preparing offline cache...'}
