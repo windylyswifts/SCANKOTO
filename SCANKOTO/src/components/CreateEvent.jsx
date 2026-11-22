@@ -1,398 +1,1134 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../utils/supabaseClient';
+
+const DURATION_PRESETS = [
+  { label: '30m', hours: 0, minutes: 30 },
+  { label: '1h', hours: 1, minutes: 0 },
+  { label: '4h', hours: 4, minutes: 0 },
+  { label: '8h', hours: 8, minutes: 0 },
+  { label: '24h', hours: 24, minutes: 0 }
+];
+
+const SAMPLE_CSV_CONTENT = [
+  'id_number,full_name,program,year',
+  '231-00101,"Dela Cruz, Juan M.",BSIS,3',
+  '231-00102,"Santos, Maria Clara L.",BSIS,3',
+  '231-00103,"Reyes, Jose Paolo A.",BSIT,2'
+].join('\n');
+
+const splitCsvRow = (row) => {
+  const cells = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < row.length; i++) {
+    const char = row[i];
+    if (char === '"') {
+      if (inQuotes && row[i + 1] === '"') {
+        current += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (char === ',' && !inQuotes) {
+      cells.push(current.trim());
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  cells.push(current.trim());
+  return cells;
+};
+
+const parseCSVToStudentObjects = (text) => {
+  const lines = text.split(/\r?\n/).filter((line) => line.trim().length > 0);
+  if (lines.length < 2) return [];
+
+  const cleanHeaders = splitCsvRow(lines[0]).map((h) =>
+    h.toLowerCase().replace(/[^a-z0-9]/g, '')
+  );
+
+  const uniqueStudents = new Map();
+
+  for (let i = 1; i < lines.length; i++) {
+    const cols = splitCsvRow(lines[i]);
+    if (cols.length < 2) continue;
+
+    const record = {};
+    cleanHeaders.forEach((header, index) => {
+      record[header] = cols[index] || '';
+    });
+
+    const studentId = record.idnumber || record.studentid || '';
+    const fullName = record.fullname || record.name || 'Unknown';
+    const program = record.program || record.course || 'Unknown';
+    const year = record.year || record.yearlevel || 'N/A';
+
+    if (studentId) {
+      uniqueStudents.set(studentId, {
+        student_id: studentId,
+        full_name: fullName,
+        year_level: year,
+        course: program,
+        email: '',
+        qr_hash: ''
+      });
+    }
+  }
+
+  return Array.from(uniqueStudents.values());
+};
+
+const formatDurationMinutes = (totalMins, includeDays = false) => {
+  if (!totalMins || totalMins <= 0) return '0m';
+
+  const totalHours = Math.floor(totalMins / 60);
+  const mins = totalMins % 60;
+
+  if (includeDays && totalHours >= 24) {
+    const days = Math.floor(totalHours / 24);
+    const remHours = totalHours % 24;
+    const dayPart = remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
+    return `${dayPart} (${totalHours}h${mins > 0 ? ` ${mins}m` : ''})`;
+  }
+
+  if (totalHours === 0) return `${mins}m`;
+  if (mins === 0) return `${totalHours}h`;
+  return `${totalHours}h ${mins}m`;
+};
 
 const CreateEvent = () => {
   const navigate = useNavigate();
 
-  // --- Form State ---
+  // --- Session Metadata ---
   const [eventName, setEventName] = useState('');
   const [eventDescription, setEventDescription] = useState('');
   const [startTime, setStartTime] = useState('');
   const [endTime, setEndTime] = useState('');
-  
-  // --- Attendance State ---
-  const [isAttendanceRequired, setIsAttendanceRequired] = useState('yes');
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [renderHours, setRenderHours] = useState(0);
+
+  // --- Clearance Threshold ---
+  const [isAttendanceRequired, setIsAttendanceRequired] = useState(true);
+  const [renderHours, setRenderHours] = useState(1);
   const [renderMinutes, setRenderMinutes] = useState(0);
 
-  // --- File, Headcount & Masterlist State ---
+  // --- Masterlist Roster ---
   const [masterlistFile, setMasterlistFile] = useState(null);
   const [parsedStudents, setParsedStudents] = useState([]);
-  const [expectedHeadcount, setExpectedHeadcount] = useState('');
   const [isDragActive, setIsDragActive] = useState(false);
+
+  // --- Submission & Guided Validation State ---
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [hasAttemptedSubmit, setHasAttemptedSubmit] = useState(false);
+  const [isShaking, setIsShaking] = useState(false);
+  const [formError, setFormError] = useState('');
+  const [csvError, setCsvError] = useState('');
 
-  // --- File Drag & Drop Handlers ---
-  const handleDragOver = (e) => {
-    e.preventDefault();
-    setIsDragActive(true);
-  };
+  // --- Section & Input Refs for Scroll-to-Missing Guidance ---
+  const detailsSectionRef = useRef(null);
+  const scheduleSectionRef = useRef(null);
+  const thresholdSectionRef = useRef(null);
+  const rosterSectionRef = useRef(null);
 
-  const handleDragLeave = (e) => {
-    e.preventDefault();
-    setIsDragActive(false);
-  };
+  const titleInputRef = useRef(null);
+  const descriptionInputRef = useRef(null);
+  const startTimeInputRef = useRef(null);
+  const endTimeInputRef = useRef(null);
 
-  // Helper: Bulletproof CSV Parser mapped to official LCO headers
-  const parseCSVToStudentObjects = (text) => {
-    const lines = text.split(/\r?\n/).filter(line => line.trim().length > 0);
-    if (lines.length < 2) return [];
+  useEffect(() => {
+    if (!isShaking) return;
+    const timer = setTimeout(() => setIsShaking(false), 450);
+    return () => clearTimeout(timer);
+  }, [isShaking]);
 
-    // Clean headers by standardizing them (lowercasing, removing spaces and special characters)
-    const rawHeaders = lines[0].split(',').map(h => h.trim());
-    const cleanHeaders = rawHeaders.map(h => h.toLowerCase().replace(/[^a-z0-9]/g, ''));
-    
-    const students = [];
+  // --- Derived Values ---
+  const eventIdSlug = useMemo(() => {
+    return eventName
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+  }, [eventName]);
 
-    for (let i = 1; i < lines.length; i++) {
-      const cols = lines[i].split(',').map(c => c.trim());
-      if (cols.length < cleanHeaders.length) continue;
-
-      const studentObj = {};
-      cleanHeaders.forEach((header, index) => {
-        studentObj[header] = cols[index] || '';
-      });
-
-      // Map the chaotic LCO headers to our clean database columns
-      // 'idnumber' maps to the LCO 'ID NUMBER' column
-      const studentId = studentObj['idnumber'] || studentObj['studentid'] || '';
-      
-      // 'fullname' matches 'FULL NAME (Last Name, First Name, Middle Initial)' after cleaning
-      const fullName = studentObj['fullname'] || studentObj['fullname'] || studentObj['name'] || 'Unknown';
-      
-      const program = studentObj['program'] || studentObj['course'] || 'Unknown';
-      const year = studentObj['year'] || studentObj['yearlevel'] || 'N/A';
-
-      if (studentId) {
-        students.push({
-          student_id: studentId,
-          full_name: fullName,
-          year_level: year,
-          course: program,
-          email: '', 
-          qr_hash: '' 
-        });
-      }
+  const scheduleAnalysis = useMemo(() => {
+    if (!startTime || !endTime) {
+      return { isValid: false, totalMinutes: 0, error: '' };
     }
-    return students;
+    const startMs = new Date(startTime).getTime();
+    const endMs = new Date(endTime).getTime();
+
+    if (Number.isNaN(startMs) || Number.isNaN(endMs)) {
+      return { isValid: false, totalMinutes: 0, error: 'Invalid date format.' };
+    }
+    if (endMs <= startMs) {
+      return { isValid: false, totalMinutes: 0, error: 'End time must be after start time.' };
+    }
+
+    const totalMinutes = Math.floor((endMs - startMs) / 60000);
+    return { isValid: true, totalMinutes, error: '' };
+  }, [startTime, endTime]);
+
+  const requiredMinutes = isAttendanceRequired ? renderHours * 60 + renderMinutes : 0;
+
+  const isThresholdValid =
+    !isAttendanceRequired ||
+    !scheduleAnalysis.isValid ||
+    requiredMinutes <= scheduleAnalysis.totalMinutes;
+
+  const thresholdExceedsWindow =
+    isAttendanceRequired &&
+    scheduleAnalysis.isValid &&
+    requiredMinutes > scheduleAnalysis.totalMinutes;
+
+  const readiness = {
+    details: Boolean(eventName.trim() && eventIdSlug && eventDescription.trim()),
+    schedule: scheduleAnalysis.isValid,
+    threshold: isThresholdValid,
+    roster: parsedStudents.length > 0
+  };
+
+  const steps = [
+    {
+      key: 'details',
+      number: '01',
+      label: 'Identity',
+      complete: readiness.details,
+      invalid: hasAttemptedSubmit && !readiness.details,
+      ref: detailsSectionRef
+    },
+    {
+      key: 'schedule',
+      number: '02',
+      label: 'Schedule',
+      complete: readiness.schedule,
+      invalid: hasAttemptedSubmit && !readiness.schedule,
+      ref: scheduleSectionRef
+    },
+    {
+      key: 'threshold',
+      number: '03',
+      label: 'Threshold',
+      complete: readiness.threshold,
+      invalid: !readiness.threshold,
+      ref: thresholdSectionRef
+    },
+    {
+      key: 'roster',
+      number: '04',
+      label: 'Roster',
+      complete: readiness.roster,
+      invalid: hasAttemptedSubmit && !readiness.roster,
+      ref: rosterSectionRef
+    }
+  ];
+
+  const completedStepCount = steps.filter((step) => step.complete).length;
+  const progressPercent = Math.round((completedStepCount / steps.length) * 100);
+  const activeStep = steps.find((step) => !step.complete) || null;
+  const isReadyToLaunch = completedStepCount === steps.length;
+
+  // --- Navigation & Guidance Helpers ---
+  const scrollToSection = (sectionRef, focusRef = null) => {
+    sectionRef?.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    if (focusRef?.current) {
+      setTimeout(() => {
+        focusRef.current?.focus({ preventScroll: true });
+      }, 260);
+    }
+  };
+
+  const guideToFirstMissingField = () => {
+    if (!eventName.trim() || !eventIdSlug) {
+      setFormError('Step 01 required: Enter a valid Session Title to generate a session link.');
+      scrollToSection(detailsSectionRef, titleInputRef);
+      return;
+    }
+    if (!eventDescription.trim()) {
+      setFormError('Step 01 required: Add a venue location or brief session description.');
+      scrollToSection(detailsSectionRef, descriptionInputRef);
+      return;
+    }
+    if (!startTime) {
+      setFormError('Step 02 required: Select when the session starts.');
+      scrollToSection(scheduleSectionRef, startTimeInputRef);
+      return;
+    }
+    if (!endTime || !scheduleAnalysis.isValid) {
+      setFormError(
+        scheduleAnalysis.error || 'Step 02 required: Select a valid End Time after the Start Time.'
+      );
+      scrollToSection(scheduleSectionRef, endTimeInputRef);
+      return;
+    }
+    if (thresholdExceedsWindow) {
+      setFormError(
+        `Step 03 conflict: Required duration (${formatDurationMinutes(requiredMinutes)}) exceeds the event timeline (${formatDurationMinutes(scheduleAnalysis.totalMinutes, true)}).`
+      );
+      scrollToSection(thresholdSectionRef);
+      return;
+    }
+    if (parsedStudents.length === 0) {
+      setFormError('Step 04 required: Upload a Student Masterlist (.csv) with at least one valid ID.');
+      scrollToSection(rosterSectionRef);
+    }
+  };
+
+  // --- Handlers ---
+  const handleFitThresholdToWindow = () => {
+    if (!scheduleAnalysis.isValid) return;
+    setRenderHours(Math.floor(scheduleAnalysis.totalMinutes / 60));
+    setRenderMinutes(scheduleAnalysis.totalMinutes % 60);
+    if (formError) setFormError('');
+  };
+
+  const handleDownloadSampleCsv = () => {
+    const blob = new Blob([SAMPLE_CSV_CONTENT], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', 'scankoto_masterlist_template.csv');
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const clearMasterlist = () => {
+    setMasterlistFile(null);
+    setParsedStudents([]);
+    setCsvError('');
   };
 
   const processFile = (file) => {
     if (!file) return;
+    setCsvError('');
+    setFormError('');
 
-    if (file.name.endsWith('.csv')) {
-      setMasterlistFile(file);
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const text = e.target.result;
-        const students = parseCSVToStudentObjects(text);
-        
-        if (students.length === 0) {
-          alert("Error: The CSV is empty or the column headers do not match (requires 'student_id').");
-          setMasterlistFile(null);
-          setExpectedHeadcount('');
-          return;
-        }
-
-        setParsedStudents(students);
-        setExpectedHeadcount(students.length.toString());
-      };
-      reader.readAsText(file);
-    } else {
-      alert("Invalid file format. Please upload a valid .csv file.");
-      setMasterlistFile(null);
-      setParsedStudents([]);
-      setExpectedHeadcount('');
+    if (!file.name.toLowerCase().endsWith('.csv')) {
+      clearMasterlist();
+      setCsvError('Invalid format. Please upload a .csv file.');
+      return;
     }
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const students = parseCSVToStudentObjects(e.target.result || '');
+
+      if (students.length === 0) {
+        clearMasterlist();
+        setCsvError(
+          'No valid records found. Ensure your CSV includes an "id_number" or "student_id" header.'
+        );
+        return;
+      }
+
+      setMasterlistFile(file);
+      setParsedStudents(students);
+    };
+    reader.readAsText(file);
   };
 
   const handleDrop = (e) => {
     e.preventDefault();
     setIsDragActive(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+    if (e.dataTransfer.files?.[0]) {
       processFile(e.dataTransfer.files[0]);
     }
   };
 
   const handleFileChange = (e) => {
-    if (e.target.files && e.target.files[0]) {
+    if (e.target.files?.[0]) {
       processFile(e.target.files[0]);
     }
   };
 
-  // --- Supabase Batch Submission Handler ---
   const handleConfirmEvent = async () => {
-    if (!eventName.trim()) { alert("Please enter an Event Title."); return; }
-    if (!eventDescription.trim()) { alert("Please provide an Event Description."); return; }
-    if (!startTime) { alert("Please select the Event Start time."); return; }
-    if (!endTime) { alert("Please select the Event End time."); return; }
-    if (new Date(endTime) <= new Date(startTime)) { alert("The Event End time must occur after the Start time."); return; }
-    
-    if (!masterlistFile || parsedStudents.length === 0) { 
-      alert("Please upload a valid Student Masterlist (.csv) containing at least one valid student record."); 
-      return; 
+    if (isSubmitting) return;
+    setFormError('');
+
+    if (!isReadyToLaunch) {
+      setHasAttemptedSubmit(true);
+      setIsShaking(true);
+      guideToFirstMissingField();
+      return;
     }
 
     setIsSubmitting(true);
 
-    const eventIdSlug = eventName.trim().toLowerCase().replace(/\s+/g, '-');
+    try {
+      const {
+        data: { session }
+      } = await supabase.auth.getSession();
+      const userId = session?.user?.id;
 
-    // Fetch the currently authenticated user's ID
-    const { data: { session } } = await supabase.auth.getSession();
-    const userId = session?.user?.id;
+      if (!userId) {
+        setFormError('Authentication expired. Please sign in again before creating a session.');
+        setIsSubmitting(false);
+        return;
+      }
 
-    if (!userId) {
-      alert("Authentication error: You must be logged in to create an event.");
+      const newEventConfig = {
+        event_id: eventIdSlug,
+        event_name: eventName.trim(),
+        description: eventDescription.trim(),
+        start_time: new Date(startTime).toISOString(),
+        end_time: new Date(endTime).toISOString(),
+        min_duration_minutes: requiredMinutes,
+        expected_headcount: parsedStudents.length,
+        created_by: userId
+      };
+
+      const { error: eventError } = await supabase
+        .from('events')
+        .upsert([newEventConfig], { onConflict: 'event_id' });
+
+      if (eventError) {
+        throw new Error(`Failed to save session: ${eventError.message}`);
+      }
+
+      const { error: accessError } = await supabase.from('event_access').upsert(
+        {
+          event_id: eventIdSlug,
+          user_id: userId,
+          role: 'owner'
+        },
+        { onConflict: 'event_id,user_id', ignoreDuplicates: true }
+      );
+
+      if (accessError) {
+        throw new Error(`Session created, but failed to assign ownership: ${accessError.message}`);
+      }
+
+      const { data: insertedStudents, error: studentError } = await supabase
+        .from('students')
+        .upsert(parsedStudents, { onConflict: 'student_id' })
+        .select('student_id');
+
+      if (studentError) {
+        throw new Error(`Session created, but roster sync failed: ${studentError.message}`);
+      }
+
+      if (!insertedStudents || insertedStudents.length === 0) {
+        throw new Error(
+          'Session created, but Supabase blocked the student roster upload due to a missing RLS policy.'
+        );
+      }
+
+      const { error: clearRosterError } = await supabase
+        .from('event_roster')
+        .delete()
+        .eq('event_id', eventIdSlug);
+
+      if (clearRosterError) {
+        throw new Error(`Failed to reset session roster: ${clearRosterError.message}`);
+      }
+
+      const rosterLinks = parsedStudents.map((student) => ({
+        event_id: eventIdSlug,
+        student_id: student.student_id,
+        full_name: student.full_name,
+        course: student.course,
+        year_level: student.year_level
+      }));
+
+      const { error: rosterLinkError } = await supabase
+        .from('event_roster')
+        .insert(rosterLinks);
+
+      if (rosterLinkError) {
+        throw new Error(`Failed to link session roster: ${rosterLinkError.message}`);
+      }
+
+      navigate('/dashboard');
+    } catch (err) {
+      console.error('CreateEvent error:', err);
+      setFormError(err.message || 'An unexpected error occurred while launching the session.');
       setIsSubmitting(false);
-      return;
     }
-
-    const newEventConfig = {
-      event_id: eventIdSlug,
-      event_name: eventName.trim(),
-      description: eventDescription.trim(),
-      start_time: new Date(startTime).toISOString(),
-      end_time: new Date(endTime).toISOString(),
-      min_duration_minutes: isAttendanceRequired === 'yes' ? (renderHours * 60 + renderMinutes) : 0,
-      expected_headcount: parsedStudents.length,
-      created_by: userId // Now securely tying to the Auth User
-    };
-
-    // 1. Upsert Event Metadata
-    const { error: eventError } = await supabase
-      .from('events')
-      .upsert([newEventConfig], { onConflict: 'event_id' });
-
-    if (eventError) {
-      console.error("Supabase Event Insert Error:", eventError);
-      alert("Failed to save event to cloud: " + eventError.message);
-      setIsSubmitting(false);
-      return;
-    }
-
-    // 2. Tie the Event to the User as 'owner' in the new event_access table
-    const { error: accessError } = await supabase
-      .from('event_access')
-      .upsert({
-         event_id: eventIdSlug,
-         user_id: userId,
-         role: 'owner'
-      }, { onConflict: 'event_id,user_id', ignoreDuplicates: true });
-
-    if (accessError) {
-      console.error("Event Access Error:", accessError);
-      alert("Event created, but failed to assign ownership: " + accessError.message);
-    }
-
-    // 3. Batch Upsert Students with strict verification (.select())
-    const { data: insertedStudents, error: studentError } = await supabase
-      .from('students')
-      .upsert(parsedStudents, { onConflict: 'student_id' })
-      .select();
-
-    setIsSubmitting(false);
-
-    if (studentError) {
-      console.error("Supabase Students Import Error:", studentError);
-      alert("Event created, but failed to import student masterlist. Details: " + studentError.message);
-      return;
-    }
-
-    if (!insertedStudents || insertedStudents.length === 0) {
-      alert("Warning: The event was created, but Supabase blocked the student upload due to a missing RLS policy. Please verify your SQL policies.");
-      return;
-    }
-
-    alert(`Success! Event "${newEventConfig.event_name}" created and ${insertedStudents.length} students synced to the cloud.`);
-    navigate('/dashboard');
   };
 
+  // --- Section Container Validation Flags ---
+  const detailsInvalid = hasAttemptedSubmit && !readiness.details;
+  const scheduleInvalid = hasAttemptedSubmit && !readiness.schedule;
+  const thresholdInvalid = !readiness.threshold;
+  const rosterInvalid = hasAttemptedSubmit && !readiness.roster;
+
   return (
-    <main className="flex-1 overflow-y-auto p-4 md:p-8 w-full flex justify-center pb-24 bg-base-200">
-      
-      <div className="w-full max-w-4xl space-y-6">
-        
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-slate-800">New Event Setup</h1>
-          <p className="text-sm text-base-content/60 mt-1">Configure event parameters, scheduling, and upload the official masterlist.</p>
+    <main className="flex-1 overflow-y-auto p-4 md:p-8 w-full flex justify-center pb-24 bg-slate-50/90 text-slate-900">
+      <div className="w-full max-w-4xl space-y-5 animate-panel-enter">
+        {/* Top Header */}
+        <header className="flex flex-col sm:flex-row sm:items-end justify-between gap-2">
+          <div>
+            <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Initialize Session</h1>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Complete the four steps below to configure and launch your attendance session.
+            </p>
+          </div>
+          <span className="text-[11px] font-mono bg-white border border-slate-200 px-3 py-1.5 rounded-xl text-slate-600 self-start sm:self-auto shadow-2xs transition-colors">
+            SLUG // {eventIdSlug || 'awaiting-title'}
+          </span>
+        </header>
+
+        {/* Compact Setup Progression Strip */}
+        <div className="bg-white border border-slate-200/90 rounded-2xl px-4 py-3 shadow-2xs space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-mono font-bold uppercase tracking-widest text-slate-400">
+                Setup Progress
+              </span>
+              <span
+                className={`text-[10px] font-mono font-semibold ${
+                  isReadyToLaunch
+                    ? 'text-emerald-700'
+                    : hasAttemptedSubmit
+                    ? 'text-rose-600'
+                    : 'text-slate-600'
+                }`}
+              >
+                {completedStepCount}/{steps.length}
+              </span>
+            </div>
+            <span className="text-[11px] font-mono text-slate-500">
+              {isReadyToLaunch
+                ? 'Ready to launch'
+                : `Next: ${activeStep.number} ${activeStep.label}`}
+            </span>
+          </div>
+
+          {/* Progress Bar */}
+          <div className="w-full h-1 bg-slate-100 rounded-full overflow-hidden">
+            <div
+              className={`h-full transition-all duration-300 rounded-full ${
+                isReadyToLaunch
+                  ? 'bg-emerald-500'
+                  : hasAttemptedSubmit
+                  ? 'bg-rose-500'
+                  : 'bg-slate-900'
+              }`}
+              style={{ width: `${progressPercent}%` }}
+            />
+          </div>
+
+          {/* Subtle Inline Step Indicators Sticking Directly Below Progress Bar */}
+          <div className="grid grid-cols-4 gap-1 pt-0.5">
+            {steps.map((step) => {
+              const isCurrent = step.key === activeStep?.key;
+              return (
+                <button
+                  key={step.key}
+                  type="button"
+                  onClick={() => scrollToSection(step.ref)}
+                  className={`flex items-center gap-1.5 py-0.5 text-[11px] font-mono transition-colors truncate ${
+                    step.invalid
+                      ? 'text-rose-600 font-semibold'
+                      : step.complete
+                      ? 'text-emerald-700 font-medium'
+                      : isCurrent
+                      ? 'text-slate-900 font-semibold'
+                      : 'text-slate-400 hover:text-slate-600'
+                  }`}
+                >
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                      step.invalid
+                        ? 'bg-rose-500'
+                        : step.complete
+                        ? 'bg-emerald-500'
+                        : isCurrent
+                        ? 'bg-slate-900'
+                        : 'bg-slate-300'
+                    }`}
+                  />
+                  <span className="truncate">
+                    {step.number} {step.label}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </div>
 
-        <div className="card bg-base-100 shadow-sm border border-base-200">
-          <div className="card-body p-6 md:p-10 space-y-8">
-            
-            {/* Details Section */}
-            <div className="space-y-4">
-              <input 
-                type="text" 
-                className="w-full text-4xl font-extrabold focus:outline-none bg-transparent placeholder:text-slate-300 text-slate-800 transition-colors"
-                value={eventName}
-                onChange={(e) => setEventName(e.target.value)}
-                placeholder="Event Title..."
-              />
-              <textarea 
-                className="w-full text-base focus:outline-none bg-transparent placeholder:text-slate-400 text-slate-600 resize-none h-20"
-                value={eventDescription}
-                onChange={(e) => setEventDescription(e.target.value)}
-                placeholder="Add a brief description or venue details for this event..."
-              />
+        {/* Guided Validation Banner */}
+        {formError && (
+          <div
+            className={`bg-rose-50 border border-rose-300 text-rose-800 rounded-2xl p-4 flex items-center justify-between gap-3 text-xs font-medium ${
+              isShaking ? 'animate-scan-reject' : ''
+            }`}
+          >
+            <div className="flex items-start gap-3">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-rose-600 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span>{formError}</span>
             </div>
+            {!isReadyToLaunch && (
+              <button
+                type="button"
+                onClick={guideToFirstMissingField}
+                className="btn btn-xs bg-rose-600 hover:bg-rose-700 text-white border-none rounded-lg font-mono flex-shrink-0"
+              >
+                Show Field
+              </button>
+            )}
+          </div>
+        )}
 
-            <div className="divider m-0"></div>
-
-            {/* Settings Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-              
-              {/* Scheduling */}
-              <div className="space-y-6">
-                <h3 className="font-semibold text-lg text-slate-700 flex items-center gap-2">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
-                  Scheduling
-                </h3>
-                
-                <div className="form-control w-full">
-                  <label className="label"><span className="label-text font-medium">Starts At</span></label>
-                  <input 
-                    type="datetime-local" 
-                    className="input input-bordered w-full" 
-                    value={startTime}
-                    onChange={(e) => setStartTime(e.target.value)}
-                  />
-                </div>
-                
-                <div className="form-control w-full">
-                  <label className="label"><span className="label-text font-medium">Ends At</span></label>
-                  <input 
-                    type="datetime-local" 
-                    className="input input-bordered w-full" 
-                    value={endTime}
-                    onChange={(e) => setEndTime(e.target.value)}
-                  />
-                </div>
+        {/* Main Configuration Container */}
+        <div className="bg-white shadow-2xs border border-slate-200/90 rounded-3xl overflow-hidden">
+          <div className="p-6 md:p-8 space-y-6">
+            {/* Step 1: Session Identity */}
+            <section
+              ref={detailsSectionRef}
+              className={`rounded-2xl border p-5 transition-all space-y-3 ${
+                detailsInvalid
+                  ? `border-rose-400 ring-2 ring-rose-500/15 bg-rose-50/20 ${
+                      isShaking ? 'animate-scan-reject' : ''
+                    }`
+                  : readiness.details
+                  ? 'border-emerald-200/90 bg-white'
+                  : activeStep?.key === 'details'
+                  ? 'border-slate-300 bg-white'
+                  : 'border-slate-200/80 bg-white'
+              }`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span
+                  className={`text-[10px] font-mono font-bold uppercase tracking-widest ${
+                    detailsInvalid ? 'text-rose-600' : 'text-slate-400'
+                  }`}
+                >
+                  01 // Session Identity
+                </span>
+                {detailsInvalid ? (
+                  <span className="text-[10px] font-mono font-bold text-rose-700 bg-rose-100 border border-rose-200 px-2 py-0.5 rounded-md">
+                    {!eventName.trim() || !eventIdSlug ? 'TITLE REQUIRED' : 'DESCRIPTION REQUIRED'}
+                  </span>
+                ) : readiness.details ? (
+                  <span className="text-[10px] font-mono font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
+                    ✓ COMPLETE
+                  </span>
+                ) : (
+                  <span className="text-[10px] font-mono text-slate-400">REQUIRED</span>
+                )}
               </div>
 
-              {/* Requirements */}
-              <div className="space-y-6">
-                <h3 className="font-semibold text-lg text-slate-700 flex items-center gap-2">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                  Requirements
-                </h3>
+              <input
+                ref={titleInputRef}
+                type="text"
+                className={`w-full text-2xl md:text-3xl font-extrabold focus:outline-none bg-transparent tracking-tight rounded-lg transition-colors text-slate-900 ${
+                  detailsInvalid && (!eventName.trim() || !eventIdSlug)
+                    ? 'placeholder:text-rose-300'
+                    : 'placeholder:text-slate-300'
+                }`}
+                value={eventName}
+                onChange={(e) => {
+                  setEventName(e.target.value);
+                  if (formError) setFormError('');
+                }}
+                placeholder="Enter session title (e.g. ISS General Assembly)..."
+              />
+              <textarea
+                ref={descriptionInputRef}
+                className={`w-full text-sm focus:outline-none rounded-2xl p-3.5 text-slate-700 resize-none h-20 transition-colors border ${
+                  detailsInvalid && !eventDescription.trim()
+                    ? 'bg-white border-rose-400 focus:border-rose-600 placeholder:text-rose-300'
+                    : 'bg-slate-50/70 focus:bg-white border-slate-200/80 focus:border-slate-900 placeholder:text-slate-400'
+                }`}
+                value={eventDescription}
+                onChange={(e) => {
+                  setEventDescription(e.target.value);
+                  if (formError) setFormError('');
+                }}
+                placeholder="Venue location, organizer notes, or check-in instructions..."
+              />
+            </section>
 
-                <div className="form-control w-full p-4 bg-base-200/50 rounded-xl border border-base-200">
-                  <label className="label cursor-pointer pb-2">
-                    <span className="label-text font-medium">Strict Attendance Required?</span> 
-                    <input 
-                      type="checkbox" 
-                      className="toggle toggle-primary" 
-                      checked={isAttendanceRequired === 'yes'}
-                      onChange={(e) => {
-                        setIsAttendanceRequired(e.target.checked ? 'yes' : 'no');
-                        if (e.target.checked) setIsModalOpen(true);
-                      }}
-                    />
-                  </label>
-                  
-                  {isAttendanceRequired === 'yes' && (
-                    <div className="mt-3 flex justify-between items-center bg-base-100 p-3 rounded-lg border border-base-200 shadow-sm">
-                      <span className="text-sm">Time to render: <strong className="text-primary">{renderHours}h {renderMinutes}m</strong></span>
-                      <button className="btn btn-xs btn-ghost text-primary" onClick={() => setIsModalOpen(true)}>Edit</button>
-                    </div>
+            {/* Step 2 & 3: Schedule & Thresholds */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Step 2: Time Window */}
+              <section
+                ref={scheduleSectionRef}
+                className={`rounded-2xl border p-5 transition-all space-y-4 ${
+                  scheduleInvalid
+                    ? `border-rose-400 ring-2 ring-rose-500/15 bg-rose-50/20 ${
+                        isShaking ? 'animate-scan-reject' : ''
+                      }`
+                    : readiness.schedule
+                    ? 'border-emerald-200/90 bg-white'
+                    : activeStep?.key === 'schedule'
+                    ? 'border-slate-300 bg-white'
+                    : 'border-slate-200/80 bg-white'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span
+                    className={`text-[10px] font-mono font-bold uppercase tracking-widest ${
+                      scheduleInvalid ? 'text-rose-600' : 'text-slate-400'
+                    }`}
+                  >
+                    02 // Active Time Window
+                  </span>
+                  {scheduleInvalid ? (
+                    <span className="text-[10px] font-mono font-bold text-rose-700 bg-rose-100 border border-rose-200 px-2 py-0.5 rounded-md">
+                      {!startTime ? 'START REQUIRED' : !endTime ? 'END REQUIRED' : 'INVALID RANGE'}
+                    </span>
+                  ) : scheduleAnalysis.isValid ? (
+                    <span className="text-[11px] font-mono font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-md">
+                      ✓ SPAN: {formatDurationMinutes(scheduleAnalysis.totalMinutes, true)}
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-mono text-slate-400">REQUIRED</span>
                   )}
                 </div>
 
-                <div className="form-control w-full">
-                  <label className="label"><span className="label-text font-medium">Student Masterlist (.csv)</span></label>
-                  
-                  <div 
-                    className={`relative border-2 border-dashed rounded-xl p-6 flex flex-col items-center justify-center text-center transition-colors cursor-pointer
-                      ${isDragActive ? 'border-primary bg-primary/10' : 'border-base-300 bg-base-50 hover:bg-base-200/50'}
-                    `}
-                    onDragOver={handleDragOver}
-                    onDragLeave={handleDragLeave}
-                    onDrop={handleDrop}
-                  >
-                    <input 
-                      type="file" 
-                      accept=".csv"
-                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                      onChange={handleFileChange}
+                <div className="space-y-3.5 bg-slate-50/80 p-4 rounded-2xl border border-slate-200/80">
+                  <div className="form-control w-full">
+                    <label className="label py-1">
+                      <span className="label-text text-xs font-semibold text-slate-700">
+                        Starts At
+                      </span>
+                    </label>
+                    <input
+                      ref={startTimeInputRef}
+                      type="datetime-local"
+                      className={`input input-sm h-10 input-bordered w-full bg-white text-slate-900 text-xs font-mono focus:outline-none rounded-xl transition-colors ${
+                        scheduleInvalid && !startTime
+                          ? 'border-rose-400 focus:border-rose-600'
+                          : 'border-slate-200 focus:border-slate-900'
+                      }`}
+                      value={startTime}
+                      onChange={(e) => {
+                        setStartTime(e.target.value);
+                        if (formError) setFormError('');
+                      }}
                     />
-                    
-                    <div className="bg-base-100 p-2 rounded-full shadow-sm border border-base-200 mb-3">
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+                  </div>
+
+                  <div className="form-control w-full">
+                    <label className="label py-1">
+                      <span className="label-text text-xs font-semibold text-slate-700">
+                        Ends At
+                      </span>
+                    </label>
+                    <input
+                      ref={endTimeInputRef}
+                      type="datetime-local"
+                      min={startTime || undefined}
+                      className={`input input-sm h-10 input-bordered w-full bg-white text-slate-900 text-xs font-mono focus:outline-none rounded-xl transition-colors ${
+                        scheduleAnalysis.error || (scheduleInvalid && !endTime)
+                          ? 'border-rose-400 focus:border-rose-600'
+                          : 'border-slate-200 focus:border-slate-900'
+                      }`}
+                      value={endTime}
+                      onChange={(e) => {
+                        setEndTime(e.target.value);
+                        if (formError) setFormError('');
+                      }}
+                    />
+                  </div>
+
+                  {scheduleAnalysis.error && (
+                    <p className="text-[11px] font-medium text-rose-600">
+                      {scheduleAnalysis.error}
+                    </p>
+                  )}
+                </div>
+              </section>
+
+              {/* Step 3: Clearance Threshold */}
+              <section
+                ref={thresholdSectionRef}
+                className={`rounded-2xl border p-5 transition-all space-y-4 ${
+                  thresholdInvalid
+                    ? `border-rose-400 ring-2 ring-rose-500/15 bg-rose-50/20 ${
+                        isShaking ? 'animate-scan-reject' : ''
+                      }`
+                    : 'border-emerald-200/90 bg-white'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span
+                    className={`text-[10px] font-mono font-bold uppercase tracking-widest ${
+                      thresholdInvalid ? 'text-rose-600' : 'text-slate-400'
+                    }`}
+                  >
+                    03 // Clearance Threshold
+                  </span>
+                  <span
+                    className={`text-[11px] font-mono font-semibold px-2.5 py-0.5 rounded-md transition-colors ${
+                      thresholdExceedsWindow
+                        ? 'bg-rose-100 text-rose-700 border border-rose-200'
+                        : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                    }`}
+                  >
+                    {isAttendanceRequired
+                      ? `${thresholdExceedsWindow ? '!' : '✓'} REQ: ${formatDurationMinutes(
+                          requiredMinutes
+                        )}`
+                      : '✓ NO MIN'}
+                  </span>
+                </div>
+
+                <div
+                  className={`p-4 rounded-2xl border space-y-4 transition-colors ${
+                    thresholdExceedsWindow
+                      ? 'bg-rose-50/50 border-rose-300'
+                      : 'bg-slate-50/80 border-slate-200/80'
+                  }`}
+                >
+                  <label className="flex items-center justify-between gap-3 cursor-pointer">
+                    <div>
+                      <span className="text-xs font-bold text-slate-900 block">
+                        Enforce Minimum Render Duration
+                      </span>
+                      <span className="text-[11px] text-slate-500">
+                        Require minimum stay between check-in & check-out
+                      </span>
                     </div>
-                    
-                    {masterlistFile ? (
-                      <div className="text-sm">
-                        <p className="font-semibold text-primary truncate max-w-xs">{masterlistFile.name}</p>
-                        <p className="text-xs opacity-60 mt-1">Detected count: {expectedHeadcount} students</p>
+                    <input
+                      type="checkbox"
+                      className="toggle toggle-sm flex-shrink-0 bg-slate-300 border-slate-300 [--tglbg:#ffffff] text-white checked:bg-slate-900 checked:border-slate-900 checked:text-white transition-colors"
+                      checked={isAttendanceRequired}
+                      onChange={(e) => {
+                        setIsAttendanceRequired(e.target.checked);
+                        if (formError) setFormError('');
+                      }}
+                    />
+                  </label>
+
+                  {isAttendanceRequired && (
+                    <div className="pt-3 border-t border-slate-200/80 space-y-3">
+                      {/* Quick Presets */}
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-[10px] font-mono uppercase text-slate-400 mr-1">
+                          Presets:
+                        </span>
+                        {DURATION_PRESETS.map((preset) => {
+                          const isSelected =
+                            renderHours === preset.hours && renderMinutes === preset.minutes;
+                          return (
+                            <button
+                              key={preset.label}
+                              type="button"
+                              onClick={() => {
+                                setRenderHours(preset.hours);
+                                setRenderMinutes(preset.minutes);
+                                if (formError) setFormError('');
+                              }}
+                              className={`px-2.5 py-1 rounded-lg text-[11px] font-mono font-semibold transition-all active:scale-95 ${
+                                isSelected
+                                  ? 'bg-slate-900 text-white'
+                                  : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'
+                              }`}
+                            >
+                              {preset.label}
+                            </button>
+                          );
+                        })}
                       </div>
-                    ) : (
-                      <div className="text-sm px-2">
-                        <span className="text-primary font-semibold">Select a .csv file</span> or drag and drop it here
+
+                      {/* Inline Hours & Minutes Inputs */}
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="bg-white border border-slate-200 rounded-xl px-3 py-2 flex items-center justify-between">
+                          <span className="text-[11px] font-mono font-semibold text-slate-500">
+                            HOURS
+                          </span>
+                          <input
+                            type="number"
+                            min="0"
+                            step="1"
+                            className="w-20 text-right font-mono font-bold text-sm text-slate-900 focus:outline-none"
+                            value={renderHours}
+                            onChange={(e) => {
+                              const parsed = parseInt(e.target.value, 10);
+                              setRenderHours(Number.isNaN(parsed) ? 0 : Math.max(0, parsed));
+                              if (formError) setFormError('');
+                            }}
+                          />
+                        </div>
+
+                        <div className="bg-white border border-slate-200 rounded-xl px-3 py-2 flex items-center justify-between">
+                          <span className="text-[11px] font-mono font-semibold text-slate-500">
+                            MINS
+                          </span>
+                          <input
+                            type="number"
+                            min="0"
+                            max="59"
+                            step="1"
+                            className="w-16 text-right font-mono font-bold text-sm text-slate-900 focus:outline-none"
+                            value={renderMinutes}
+                            onChange={(e) => {
+                              const parsed = parseInt(e.target.value, 10);
+                              setRenderMinutes(
+                                Number.isNaN(parsed) ? 0 : Math.max(0, Math.min(59, parsed))
+                              );
+                              if (formError) setFormError('');
+                            }}
+                          />
+                        </div>
+                      </div>
+
+                      {scheduleAnalysis.isValid && !thresholdExceedsWindow && (
+                        <p className="text-[11px] font-mono text-slate-500">
+                          MAX ALLOWED BY TIMELINE:{' '}
+                          {formatDurationMinutes(scheduleAnalysis.totalMinutes, true)}
+                        </p>
+                      )}
+
+                      {thresholdExceedsWindow && (
+                        <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 flex items-center justify-between gap-2">
+                          <p className="text-[11px] font-medium text-rose-700 leading-snug">
+                            Exceeds event timeline (
+                            {formatDurationMinutes(scheduleAnalysis.totalMinutes, true)} max).
+                          </p>
+                          <button
+                            type="button"
+                            onClick={handleFitThresholdToWindow}
+                            className="btn btn-xs bg-rose-600 hover:bg-rose-700 text-white border-none rounded-lg font-mono flex-shrink-0"
+                          >
+                            Fit to Window
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </section>
+            </div>
+
+            {/* Step 4: Student Masterlist Upload & Preview */}
+            <section
+              ref={rosterSectionRef}
+              className={`rounded-2xl border p-5 transition-all space-y-4 ${
+                rosterInvalid
+                  ? `border-rose-400 ring-2 ring-rose-500/15 bg-rose-50/20 ${
+                      isShaking ? 'animate-scan-reject' : ''
+                    }`
+                  : readiness.roster
+                  ? 'border-emerald-200/90 bg-white'
+                  : activeStep?.key === 'roster'
+                  ? 'border-slate-300 bg-white'
+                  : 'border-slate-200/80 bg-white'
+              }`}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`text-[10px] font-mono font-bold uppercase tracking-widest ${
+                      rosterInvalid ? 'text-rose-600' : 'text-slate-400'
+                    }`}
+                  >
+                    04 // Masterlist Roster (.csv)
+                  </span>
+                  {rosterInvalid ? (
+                    <span className="text-[10px] font-mono font-bold text-rose-700 bg-rose-100 border border-rose-200 px-2 py-0.5 rounded-md">
+                      CSV REQUIRED
+                    </span>
+                  ) : readiness.roster ? (
+                    <span className="text-[10px] font-mono font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
+                      ✓ {parsedStudents.length} LOADED
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-mono text-slate-400">REQUIRED</span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={handleDownloadSampleCsv}
+                  className="text-[11px] font-mono font-semibold text-slate-600 hover:text-slate-900 underline underline-offset-2"
+                >
+                  Download CSV Template
+                </button>
+              </div>
+
+              {!masterlistFile ? (
+                <div
+                  className={`relative border-2 border-dashed rounded-2xl p-8 flex flex-col items-center justify-center text-center transition-all cursor-pointer ${
+                    isDragActive
+                      ? 'border-slate-900 bg-slate-100 scale-[1.01]'
+                      : rosterInvalid
+                      ? 'border-rose-400 bg-rose-50/40 hover:bg-rose-50/70'
+                      : 'border-slate-300 bg-slate-50/70 hover:bg-slate-100/70'
+                  }`}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setIsDragActive(true);
+                  }}
+                  onDragLeave={(e) => {
+                    e.preventDefault();
+                    setIsDragActive(false);
+                  }}
+                  onDrop={handleDrop}
+                >
+                  <input
+                    type="file"
+                    accept=".csv"
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                    onChange={handleFileChange}
+                  />
+
+                  <div
+                    className={`bg-white p-3 rounded-xl shadow-2xs border mb-3 ${
+                      rosterInvalid ? 'border-rose-200' : 'border-slate-200'
+                    }`}
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      className={`h-5 w-5 ${rosterInvalid ? 'text-rose-600' : 'text-slate-800'}`}
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                    >
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                    </svg>
+                  </div>
+
+                  <p className="text-xs text-slate-600">
+                    <span className="text-slate-900 font-bold">Choose a .csv masterlist</span> or drag
+                    and drop here
+                  </p>
+                  <p className="text-[11px] font-mono text-slate-400 mt-1">
+                    COLUMNS // id_number, full_name, program, year
+                  </p>
+                </div>
+              ) : (
+                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3 overflow-hidden">
+                      <div className="w-9 h-9 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 flex items-center justify-center flex-shrink-0 font-mono font-bold text-xs">
+                        CSV
+                      </div>
+                      <div className="overflow-hidden">
+                        <p className="text-xs font-mono font-bold text-slate-900 truncate">
+                          {masterlistFile.name}
+                        </p>
+                        <p className="text-[11px] font-mono text-emerald-700 font-semibold">
+                          {parsedStudents.length} UNIQUE STUDENTS READY
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={clearMasterlist}
+                      className="btn btn-xs bg-white hover:bg-rose-50 active:scale-95 text-slate-600 hover:text-rose-700 border-slate-200 hover:border-rose-200 rounded-lg font-mono transition-transform"
+                    >
+                      Replace
+                    </button>
+                  </div>
+
+                  {/* Roster Preview Table */}
+                  <div className="bg-white border border-slate-200/80 rounded-xl overflow-hidden">
+                    <table className="table table-xs">
+                      <thead>
+                        <tr className="bg-slate-50 text-slate-500 font-mono text-[10px]">
+                          <th>Student ID</th>
+                          <th>Full Name</th>
+                          <th>Program / Year</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {parsedStudents.slice(0, 4).map((student) => (
+                          <tr
+                            key={student.student_id}
+                            className="border-b border-slate-100 last:border-none"
+                          >
+                            <td className="font-mono font-semibold text-slate-900">
+                              {student.student_id}
+                            </td>
+                            <td className="text-slate-700">{student.full_name}</td>
+                            <td className="font-mono text-slate-500">
+                              {student.course} · {student.year_level}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {parsedStudents.length > 4 && (
+                      <div className="px-3 py-1.5 bg-slate-50 border-t border-slate-100 text-[10px] font-mono text-slate-400 text-center">
+                        + {parsedStudents.length - 4} MORE RECORDS IN ROSTER
                       </div>
                     )}
                   </div>
                 </div>
+              )}
 
-              </div>
+              {csvError && (
+                <p className="text-xs font-medium text-rose-600 bg-rose-50 border border-rose-200 rounded-xl px-3.5 py-2.5">
+                  {csvError}
+                </p>
+              )}
+            </section>
+          </div>
+
+          {/* Readiness Checklist & Action Footer */}
+          <div className="bg-slate-50 px-6 py-4 md:px-8 border-t border-slate-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono">
+              {steps.map((step) => (
+                <button
+                  key={step.key}
+                  type="button"
+                  onClick={() => scrollToSection(step.ref)}
+                  className={`px-2 py-1 rounded-lg transition-colors ${
+                    step.invalid
+                      ? 'bg-rose-100 text-rose-700 font-semibold'
+                      : step.complete
+                      ? 'text-emerald-700 font-semibold hover:bg-emerald-50'
+                      : 'text-slate-500 hover:bg-slate-200/60'
+                  }`}
+                >
+                  {step.invalid ? '✕' : step.complete ? '✓' : '○'} {step.label}
+                  {step.key === 'roster' ? ` (${parsedStudents.length})` : ''}
+                </button>
+              ))}
             </div>
 
-          </div>
-          
-          <div className="bg-base-200/50 px-6 py-5 md:px-10 border-t border-base-200 flex justify-between items-center rounded-b-2xl">
-            <button className="btn btn-ghost text-slate-500" onClick={() => navigate('/dashboard')} disabled={isSubmitting}>Discard</button>
-            <button className="btn btn-primary px-8 shadow-sm" onClick={handleConfirmEvent} disabled={isSubmitting}>
-              {isSubmitting ? 'Syncing to Cloud...' : 'Launch Event'}
-              {!isSubmitting && <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 ml-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" /></svg>}
-            </button>
+            <div className="flex items-center justify-end gap-2.5">
+              <button
+                type="button"
+                className="btn btn-sm btn-ghost text-slate-600 hover:bg-slate-200/60 rounded-xl"
+                onClick={() => navigate('/dashboard')}
+                disabled={isSubmitting}
+              >
+                Discard
+              </button>
+              <button
+                type="button"
+                className={`btn btn-sm active:scale-[0.98] text-white border-none px-6 h-10 rounded-xl font-semibold shadow-2xs transition-all ${
+                  isReadyToLaunch
+                    ? 'bg-slate-900 hover:bg-slate-800'
+                    : 'bg-slate-700 hover:bg-slate-800'
+                }`}
+                onClick={handleConfirmEvent}
+                disabled={isSubmitting}
+              >
+                {isSubmitting ? (
+                  <>
+                    <span className="loading loading-spinner loading-xs mr-1.5"></span>
+                    Syncing Roster...
+                  </>
+                ) : isReadyToLaunch ? (
+                  <>
+                    Launch Session
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 ml-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
+                    </svg>
+                  </>
+                ) : (
+                  <>
+                    Review Missing ({steps.length - completedStepCount})
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 ml-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                    </svg>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       </div>
-
-      {/* MODAL: Time to Render */}
-      {isModalOpen && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-base-100 rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden animate-scale-in">
-            <div className="p-8 text-center bg-gradient-to-b from-base-100 to-base-200">
-              <div className="w-12 h-12 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-4 text-primary">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-              </div>
-              <h3 className="font-bold text-xl mb-2 text-slate-800">Set Minimum Duration</h3>
-              <p className="text-sm text-base-content/60 mb-8">Specify exactly how long an attendee must render before they are cleared.</p>
-              
-              <div className="flex justify-center items-center gap-4">
-                <div className="flex flex-col items-center">
-                  <input 
-                    type="number" 
-                    min="0" 
-                    className="input input-bordered w-20 text-center text-3xl font-bold text-slate-700 focus:border-primary focus:ring-1 focus:ring-primary shadow-inner" 
-                    value={renderHours}
-                    onChange={(e) => setRenderHours(Number(e.target.value))}
-                  />
-                  <span className="text-xs font-semibold text-slate-400 mt-2 uppercase tracking-wider">Hours</span>
-                </div>
-                <span className="text-4xl font-light text-slate-300 pb-6">:</span>
-                <div className="flex flex-col items-center">
-                  <input 
-                    type="number" 
-                    min="0" 
-                    max="59"
-                    className="input input-bordered w-20 text-center text-3xl font-bold text-slate-700 focus:border-primary focus:ring-1 focus:ring-primary shadow-inner" 
-                    value={renderMinutes}
-                    onChange={(e) => setRenderMinutes(Number(e.target.value))}
-                  />
-                  <span className="text-xs font-semibold text-slate-400 mt-2 uppercase tracking-wider">Mins</span>
-                </div>
-              </div>
-            </div>
-            <div className="bg-base-100 px-6 py-4 flex justify-end border-t border-base-200">
-              <button className="btn btn-primary w-full shadow-md" onClick={() => setIsModalOpen(false)}>Save Duration</button>
-            </div>
-          </div>
-        </div>
-      )}
     </main>
   );
 };

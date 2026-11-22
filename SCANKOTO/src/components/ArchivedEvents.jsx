@@ -69,7 +69,6 @@ const ArchivedEvents = () => {
   const handleExport = async (event) => {
     if (!event?.event_id) return;
     setExporting(true);
-
     try {
       const { data, error } = await supabase
         .from('attendance_logs')
@@ -80,9 +79,7 @@ const ArchivedEvents = () => {
 
       const formattedLogs = (data || []).map((row) => {
         const checkInMs = new Date(row.check_in_time).getTime();
-        const checkOutMs = row.check_out_time
-          ? new Date(row.check_out_time).getTime()
-          : null;
+        const checkOutMs = row.check_out_time ? new Date(row.check_out_time).getTime() : null;
 
         return {
           id: row.record_id,
@@ -105,30 +102,32 @@ const ArchivedEvents = () => {
   };
 
   return (
-    <main className="flex-1 overflow-y-auto bg-base-200 p-4 md:p-8 flex flex-col relative w-full pb-24">
-      <div className="max-w-4xl mx-auto w-full">
+    <main className="flex-1 overflow-y-auto bg-slate-50/90 p-4 md:p-8 flex flex-col relative w-full pb-24 text-slate-900">
+      <div className="max-w-4xl mx-auto w-full animate-panel-enter">
         <div className="mb-8">
-          <h1 className="text-3xl font-bold text-slate-800">Archived Events</h1>
-          <p className="text-sm text-base-content/60 mt-1">
-            Hidden from main dashboard. Click an event to view details, export data, or restore it.
+          <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Archived Sessions</h1>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Cold storage for past sessions. Inspect telemetry, export XLSX sheets, or restore to active console.
           </p>
         </div>
 
         {loading ? (
           <div className="flex justify-center items-center h-64">
-            <span className="loading loading-spinner loading-lg text-primary"></span>
+            <span className="loading loading-spinner loading-lg text-slate-900"></span>
           </div>
         ) : (
-          <div className="bg-base-100 rounded-2xl shadow-sm border border-base-200 overflow-hidden">
+          <div className="bg-white rounded-2xl shadow-2xs border border-slate-200/90 overflow-hidden">
             {events.length === 0 ? (
               <div className="text-center py-16">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 mx-auto text-base-content/20 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 mx-auto text-slate-300 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
                 </svg>
-                <h3 className="font-semibold text-slate-600">Archive is empty</h3>
+                <h3 className="text-xs font-mono uppercase tracking-wider font-semibold text-slate-400">
+                  Archive repository empty
+                </h3>
               </div>
             ) : (
-              <ul className="divide-y divide-base-200">
+              <ul className="divide-y divide-slate-100">
                 {events.map((evt) => (
                   <li
                     key={evt.event_id}
@@ -136,17 +135,19 @@ const ArchivedEvents = () => {
                     onClick={() => setSelectedEvent(evt)}
                   >
                     <div className="flex items-center gap-4">
-                      <div className="bg-base-200 p-3 rounded-xl text-base-content/50">
+                      <div className="bg-slate-100 p-2.5 rounded-xl text-slate-700">
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
                         </svg>
                       </div>
                       <div>
-                        <h3 className="font-bold text-slate-800">{evt.event_name}</h3>
-                        <p className="text-xs text-base-content/50 font-mono mt-0.5">ID: {evt.event_id}</p>
+                        <h3 className="text-sm font-bold text-slate-900">{evt.event_name}</h3>
+                        <p className="text-[11px] text-slate-400 font-mono mt-0.5">
+                          ID // {evt.event_id}
+                        </p>
                       </div>
                     </div>
-                    <div className="text-sm font-medium text-slate-500 pr-4">
+                    <div className="text-xs font-mono text-slate-500 pr-2">
                       {new Date(evt.start_time).toLocaleDateString('en-US', {
                         month: 'short',
                         day: 'numeric',
@@ -161,97 +162,104 @@ const ArchivedEvents = () => {
         )}
       </div>
 
-      {/* GUI Modal Details Panel */}
+      {/* Archived Session Inspector Modal */}
       <dialog className={`modal ${selectedEvent ? 'modal-open' : ''}`}>
-        <div className="modal-box p-0 max-w-lg overflow-hidden bg-base-100 rounded-2xl">
-          <div className="bg-slate-800 p-6 text-white relative">
+        <div className="modal-box p-0 max-w-lg overflow-hidden bg-white rounded-3xl border border-slate-200 animate-scale-in">
+          <div className="bg-slate-900 p-6 text-white relative">
             <button
               type="button"
-              className="btn btn-sm btn-circle btn-ghost absolute right-4 top-4 text-white hover:bg-white/20"
+              className="btn btn-sm btn-circle btn-ghost absolute right-4 top-4 text-slate-300 hover:bg-white/10"
               onClick={() => setSelectedEvent(null)}
             >
               ✕
             </button>
-            <div className="flex items-center gap-2 mb-2 opacity-70">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
-              </svg>
-              <span className="text-xs font-bold uppercase tracking-wider">Archived File</span>
+            <div className="flex items-center gap-2 mb-2 text-slate-400">
+              <span className="text-[10px] font-mono font-bold uppercase tracking-widest">
+                ARCHIVED RECORD // COLD STORAGE
+              </span>
             </div>
-            <h2 className="text-2xl font-bold pr-8">{selectedEvent?.event_name}</h2>
+            <h2 className="text-xl font-bold pr-8">{selectedEvent?.event_name}</h2>
           </div>
 
           <div className="p-6">
-            <p className="text-sm text-slate-600 mb-6 border-l-4 border-slate-300 pl-3">
-              {selectedEvent?.description || 'No specific description attached to this event.'}
+            <p className="text-xs text-slate-600 mb-6 border-l-2 border-slate-900 pl-3">
+              {selectedEvent?.description || 'No specific description attached to this session.'}
             </p>
 
-            <div className="grid grid-cols-2 gap-4 mb-6">
-              <div className="bg-base-200 p-3 rounded-lg">
-                <span className="text-xs text-base-content/50 uppercase block font-semibold">Date Started</span>
-                <span className="text-sm font-medium">
+            <div className="grid grid-cols-2 gap-3 mb-6">
+              <div className="bg-slate-50 border border-slate-100 p-3 rounded-xl">
+                <span className="text-[10px] font-mono text-slate-400 uppercase block font-semibold">
+                  Date Started
+                </span>
+                <span className="text-xs font-mono font-bold text-slate-900">
                   {selectedEvent && new Date(selectedEvent.start_time).toLocaleDateString()}
                 </span>
               </div>
-              <div className="bg-base-200 p-3 rounded-lg">
-                <span className="text-xs text-base-content/50 uppercase block font-semibold">Target Time</span>
-                <span className="text-sm font-medium">{selectedEvent?.min_duration_minutes} Minutes</span>
+              <div className="bg-slate-50 border border-slate-100 p-3 rounded-xl">
+                <span className="text-[10px] font-mono text-slate-400 uppercase block font-semibold">
+                  Render Threshold
+                </span>
+                <span className="text-xs font-mono font-bold text-slate-900">
+                  {selectedEvent?.min_duration_minutes} Mins
+                </span>
               </div>
-              <div className="bg-base-200 p-3 rounded-lg">
-                <span className="text-xs text-base-content/50 uppercase block font-semibold">Headcount Goal</span>
-                <span className="text-sm font-medium">{selectedEvent?.expected_headcount} Users</span>
+              <div className="bg-slate-50 border border-slate-100 p-3 rounded-xl">
+                <span className="text-[10px] font-mono text-slate-400 uppercase block font-semibold">
+                  Expected Roster
+                </span>
+                <span className="text-xs font-mono font-bold text-slate-900">
+                  {selectedEvent?.expected_headcount} Users
+                </span>
               </div>
-              <div className="bg-base-200 p-3 rounded-lg">
-                <span className="text-xs text-base-content/50 uppercase block font-semibold">Event ID</span>
-                <span className="text-xs font-mono font-medium">{selectedEvent?.event_id}</span>
+              <div className="bg-slate-50 border border-slate-100 p-3 rounded-xl">
+                <span className="text-[10px] font-mono text-slate-400 uppercase block font-semibold">
+                  Session ID
+                </span>
+                <span className="text-xs font-mono font-bold text-slate-900 truncate block">
+                  {selectedEvent?.event_id}
+                </span>
               </div>
             </div>
 
-            <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-2.5">
               <button
                 type="button"
                 onClick={() => handleExport(selectedEvent)}
                 disabled={exporting}
-                className="btn btn-success text-white w-full shadow-sm"
+                className="btn bg-slate-900 hover:bg-slate-800 active:scale-[0.99] text-white border-none w-full rounded-xl font-semibold text-xs transition-transform"
               >
                 {exporting ? (
                   <span className="loading loading-spinner loading-sm"></span>
                 ) : (
                   <>
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                    </svg>{' '}
-                    Export CSV/XLSX Data
+                    </svg>
+                    Export XLSX Report
                   </>
                 )}
               </button>
 
-              <div className="flex gap-3">
+              <div className="flex gap-2.5">
                 <button
                   type="button"
                   onClick={() => handleUnarchive(selectedEvent.event_id)}
-                  className="btn btn-outline flex-1 border-slate-300 text-slate-700 hover:bg-slate-100 hover:text-slate-800"
+                  className="btn bg-slate-100 hover:bg-slate-200 active:scale-[0.98] flex-1 border-none text-slate-800 rounded-xl font-semibold text-xs transition-transform"
                 >
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
-                  </svg>{' '}
-                  Unarchive
+                  Restore Session
                 </button>
                 <button
                   type="button"
                   onClick={() => handleDelete(selectedEvent.event_id)}
-                  className="btn btn-outline btn-error flex-1"
+                  className="btn bg-rose-50 hover:bg-rose-600 active:scale-[0.98] border-none text-rose-700 hover:text-white flex-1 rounded-xl font-semibold text-xs transition-all"
                 >
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                  </svg>{' '}
-                  Delete
+                  Purge Record
                 </button>
               </div>
             </div>
           </div>
         </div>
-        <form method="dialog" className="modal-backdrop bg-black/40">
+        <form method="dialog" className="modal-backdrop bg-slate-900/40">
           <button type="button" onClick={() => setSelectedEvent(null)}>
             close
           </button>

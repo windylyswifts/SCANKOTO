@@ -1,4 +1,116 @@
 @import "tailwindcss";
- @plugin "daisyui" {
-   themes: garden --default;
- }
+@plugin "daisyui" {
+  themes: light --default;
+}
+
+@layer base {
+  html {
+    background-color: #f8fafc;
+    color: #0f172a;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+@keyframes scale-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes panel-enter {
+  0% {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes optical-sweep {
+  0% {
+    transform: translateY(0%);
+  }
+  100% {
+    transform: translateY(96%);
+  }
+}
+
+@keyframes scan-reject {
+  0%, 100% {
+    transform: translateX(0);
+  }
+  20%, 60% {
+    transform: translateX(-5px);
+  }
+  40%, 80% {
+    transform: translateX(5px);
+  }
+}
+
+@keyframes reticle-breathe {
+  0%, 100% {
+    opacity: 0.7;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.06);
+  }
+}
+
+@keyframes row-flash {
+  0% {
+    background-color: rgba(16, 185, 129, 0.14);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+.animate-scale-in {
+  will-change: transform, opacity;
+  animation: scale-in 0.18s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-panel-enter {
+  will-change: transform, opacity;
+  animation: panel-enter 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-optical-sweep {
+  will-change: transform;
+  animation: optical-sweep 0.95s cubic-bezier(0.4, 0, 0.2, 1) infinite alternate;
+}
+
+.animate-scan-reject {
+  will-change: transform;
+  animation: scan-reject 0.36s ease-in-out;
+}
+
+.animate-reticle-breathe {
+  will-change: transform, opacity;
+  animation: reticle-breathe 2.2s ease-in-out infinite;
+}
+
+.animate-row-flash {
+  animation: row-flash 1.4s ease-out forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-scale-in,
+  .animate-panel-enter,
+  .animate-optical-sweep,
+  .animate-scan-reject,
+  .animate-reticle-breathe,
+  .animate-row-flash {
+    animation: none !important;
+  }
+}

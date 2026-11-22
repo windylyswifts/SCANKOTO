@@ -138,41 +138,80 @@ export const updateLocalLogSyncStatus = async (id, newStatus) => {
 
 export const cacheEventData = async (eventId) => {
   try {
-    const { data: eventData, error: eventError } = await supabase
-      .from('events')
-      .select('*')
-      .eq('event_id', eventId)
-      .single();
+    const [{ data: eventData, error: eventError }, { data: rosterRows, error: rosterError }] =
+      await Promise.all([
+        supabase.from('events').select('*').eq('event_id', eventId).single(),
+        supabase
+          .from('event_roster')
+          .select(
+            'student_id, full_name, course, year_level, students (student_id, full_name, course, year_level, email, qr_hash)'
+          )
+          .eq('event_id', eventId)
+      ]);
 
     if (eventError) throw eventError;
+    if (rosterError) throw rosterError;
 
-    const { data: studentsData, error: studentError } = await supabase
-      .from('students')
-      .select('*');
-
-    if (studentError) throw studentError;
+    // Strictly scoped to this event's event_roster rows (never pulls global students table)
+    const validStudentMap = new Map();
+    (rosterRows || []).forEach((row) => {
+      const profile = row.students || {};
+      const studentId = row.student_id || profile.student_id;
+      if (studentId && profile.qr_hash !== 'anomaly') {
+        validStudentMap.set(studentId, {
+          student_id: studentId,
+          full_name: row.full_name || profile.full_name || 'Unknown Student',
+          course: row.course || profile.course || 'Unknown',
+          year_level: row.year_level || profile.year_level || 'N/A',
+          email: profile.email || '',
+          qr_hash: profile.qr_hash || '',
+          cachedEventId: eventId
+        });
+      }
+    });
+    const cleanStudents = Array.from(validStudentMap.values());
 
     const db = await initDB();
 
     await new Promise((resolve, reject) => {
-      const tx = db.transaction('events', 'readwrite');
+      const tx = db.transaction(['events', 'students'], 'readwrite');
       tx.objectStore('events').put(eventData);
+
+      const studentStore = tx.objectStore('students');
+      studentStore.clear();
+      cleanStudents.forEach((student) => studentStore.put(student));
+
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     });
 
-    await new Promise((resolve, reject) => {
-      const tx = db.transaction('students', 'readwrite');
-      const store = tx.objectStore('students');
-      (studentsData || []).forEach((student) => store.put(student));
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-    });
-
-    return { success: true, count: (studentsData || []).length, event: eventData };
+    return { success: true, count: cleanStudents.length, event: eventData };
   } catch (error) {
     return { success: false, error };
   }
+};
+
+export const getEventCacheStatus = async (eventId) => {
+  const db = await initDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(['events', 'students'], 'readonly');
+    const eventReq = tx.objectStore('events').get(eventId);
+    const studentsReq = tx.objectStore('students').getAll();
+
+    tx.oncomplete = () => {
+      const localEvent = eventReq.result || null;
+      const validStudents = (studentsReq.result || []).filter(
+        (s) => s.qr_hash !== 'anomaly' && s.cachedEventId === eventId
+      );
+
+      resolve({
+        isCached: Boolean(localEvent),
+        count: validStudents.length,
+        event: localEvent
+      });
+    };
+    tx.onerror = () => reject(tx.error);
+  });
 };
 
 export const getLocalEvent = async (eventId) => {
@@ -190,7 +229,10 @@ export const getLocalStudent = async (studentId) => {
   return new Promise((resolve, reject) => {
     const tx = db.transaction('students', 'readonly');
     const request = tx.objectStore('students').get(studentId);
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      const student = request.result;
+      resolve(student && student.qr_hash !== 'anomaly' ? student : undefined);
+    };
     request.onerror = () => reject(tx.error);
   });
 };
@@ -200,7 +242,6 @@ export const getStudentAttendanceRecord = async (eventId, studentId) => {
   const matches = logs.filter((log) => log.eventId === eventId && log.studentId === studentId);
   if (matches.length === 0) return undefined;
 
-  // Prefer the record that already has a checkOutTime or is most recently updated
   return matches.sort((a, b) => {
     if (Boolean(b.checkOutTime) !== Boolean(a.checkOutTime)) {
       return b.checkOutTime ? 1 : -1;
