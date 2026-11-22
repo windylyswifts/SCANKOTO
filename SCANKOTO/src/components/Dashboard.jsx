@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { supabase } from '../utils/supabaseClient';
-import { getPendingLogs } from '../utils/db';
 import { exportToCSV } from '../utils/export';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -13,8 +12,7 @@ const CONTACTS = [
 const LOG_FILTERS = [
   { id: 'all', label: 'All' },
   { id: 'checked-in', label: 'Checked-In' },
-  { id: 'completed', label: 'Completed' },
-  { id: 'pending', label: 'Pending Sync' }
+  { id: 'completed', label: 'Completed' }
 ];
 
 const MAX_NOTIFICATIONS = 4;
@@ -57,7 +55,7 @@ const Dashboard = () => {
   const [copiedKey, setCopiedKey] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
   const [rightPanelWidth, setRightPanelWidth] = useState(296);
-  const [isMobile, setIsMobile] = useState(window.innerWidth < 1024);
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth < 1024);
   const [isRightPanelOpenMobile, setIsRightPanelOpenMobile] = useState(false);
   const [isRightPanelOpenDesktop, setIsRightPanelOpenDesktop] = useState(true);
 
@@ -117,8 +115,8 @@ const Dashboard = () => {
     loadEventsFromCloud();
   }, [user]);
 
-  // 2. Hybrid Fetcher: Merges Supabase logs with local IndexedDB pending scans
-  const loadMergedLogs = useCallback(async () => {
+  // 2. Fetch Supabase attendance logs & detect live scan transitions
+  const loadCloudLogs = useCallback(async () => {
     const currentEventId = activeEvent?.event_id;
     if (!currentEventId) return;
 
@@ -130,7 +128,7 @@ const Dashboard = () => {
 
       if (error) throw error;
 
-      const formattedCloudLogs = (cloudData || []).map((row) => {
+      const formattedLogs = (cloudData || []).map((row) => {
         const checkInMs = new Date(row.check_in_time).getTime();
         const checkOutMs = row.check_out_time ? new Date(row.check_out_time).getTime() : null;
 
@@ -140,35 +138,27 @@ const Dashboard = () => {
           timestamp: checkInMs,
           checkInTime: checkInMs,
           checkOutTime: checkOutMs,
-          syncStatus: 'synced',
           status: row.status || (checkOutMs ? 'Completed / Valid' : 'Checked-In')
         };
       });
 
-      const localPending = await getPendingLogs();
-      const eventPending = localPending.filter((log) => log.eventId === currentEventId);
-
-      const pendingIds = new Set(eventPending.map((l) => l.studentId));
-      const finalCloudLogs = formattedCloudLogs.filter((l) => !pendingIds.has(l.studentId));
-
-      const merged = [...finalCloudLogs, ...eventPending];
-      merged.sort((a, b) => (b.checkOutTime || b.timestamp) - (a.checkOutTime || a.timestamp));
+      formattedLogs.sort((a, b) => (b.checkOutTime || b.timestamp) - (a.checkOutTime || a.timestamp));
 
       // Seed baseline states on initial load of an event so historical rows don't flood the feed
       if (seededEventIdRef.current !== currentEventId) {
         const initialStates = new Map();
-        merged.forEach((log) => {
+        formattedLogs.forEach((log) => {
           initialStates.set(log.studentId, log.checkOutTime ? 'checked-out' : 'checked-in');
         });
         knownLogStatesRef.current = initialStates;
         seededEventIdRef.current = currentEventId;
-        setLogs(merged);
+        setLogs(formattedLogs);
         return;
       }
 
       // Detect genuine new check-in / check-out transitions synchronously
       const newlyTriggered = [];
-      merged.forEach((log) => {
+      formattedLogs.forEach((log) => {
         const nextPhase = log.checkOutTime ? 'checked-out' : 'checked-in';
         const prevPhase = knownLogStatesRef.current.get(log.studentId);
 
@@ -192,20 +182,16 @@ const Dashboard = () => {
         setNotifications((prev) => [...newlyTriggered, ...prev].slice(0, MAX_NOTIFICATIONS));
       }
 
-      setLogs(merged);
+      setLogs(formattedLogs);
     } catch (err) {
-      console.error('Failed to load hybrid logs:', err);
+      console.error('Failed to load attendance logs:', err);
     }
   }, [activeEvent?.event_id]);
 
-  // 3. Subscribe to IndexedDB updates & Supabase Realtime
+  // 3. Initial fetch & Supabase Realtime subscription
   useEffect(() => {
-    loadMergedLogs();
-    window.addEventListener('db-updated', loadMergedLogs);
-    return () => window.removeEventListener('db-updated', loadMergedLogs);
-  }, [loadMergedLogs]);
+    loadCloudLogs();
 
-  useEffect(() => {
     if (!activeEvent?.event_id) return;
 
     const channel = supabase
@@ -218,14 +204,14 @@ const Dashboard = () => {
           table: 'attendance_logs',
           filter: `event_id=eq.${activeEvent.event_id}`
         },
-        loadMergedLogs
+        loadCloudLogs
       )
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [activeEvent?.event_id, loadMergedLogs]);
+  }, [activeEvent?.event_id, loadCloudLogs]);
 
   // 4. Desktop right-panel resize handler
   useEffect(() => {
@@ -262,11 +248,11 @@ const Dashboard = () => {
   const telemetry = useMemo(() => {
     const total = logs.length;
     const completed = logs.filter((l) => Boolean(l.checkOutTime)).length;
-    const pendingSync = logs.filter((l) => l.syncStatus === 'pending').length;
+    const activeCheckedIn = total - completed;
     const attendanceRate =
       expectedCount > 0 ? Math.min(100, Math.round((total / expectedCount) * 100)) : 0;
 
-    return { total, completed, pendingSync, attendanceRate };
+    return { total, completed, activeCheckedIn, attendanceRate };
   }, [logs, expectedCount]);
 
   const filteredTableLogs = useMemo(() => {
@@ -278,7 +264,6 @@ const Dashboard = () => {
 
       if (statusFilter === 'checked-in') return !log.checkOutTime;
       if (statusFilter === 'completed') return Boolean(log.checkOutTime);
-      if (statusFilter === 'pending') return log.syncStatus === 'pending';
       return true;
     });
   }, [logs, searchQuery, statusFilter]);
@@ -359,7 +344,7 @@ const Dashboard = () => {
   const handleEmailReport = (emailAddress) => {
     const subject = encodeURIComponent(`Attendance Report: ${activeEventName}`);
     const body = encodeURIComponent(
-      `Hello,\n\nHere is the real-time summary for ${activeEventName}:\n\nTotal Headcount: ${telemetry.total}/${expectedCount}\nCompleted Check-Outs: ${telemetry.completed}\nPending Server Sync: ${telemetry.pendingSync}\n\n* Note: To view the raw CSV/XLSX spreadsheet, please click the Export button on the dashboard.\n\nBest,\nSCANKOTO System`
+      `Hello,\n\nHere is the real-time summary for ${activeEventName}:\n\nTotal Headcount: ${telemetry.total}/${expectedCount}\nCompleted Check-Outs: ${telemetry.completed}\nCurrently Checked-In: ${telemetry.activeCheckedIn}\n\n* Note: To view the raw CSV/XLSX spreadsheet, please click the Export button on the dashboard.\n\nBest,\nSCANKOTO System`
     );
     window.location.href = `mailto:${emailAddress}?subject=${subject}&body=${body}`;
   };
@@ -509,11 +494,9 @@ const Dashboard = () => {
               </div>
 
               <div className="flex items-center justify-between text-[11px] font-mono text-slate-500 pt-1 border-t border-slate-100">
+                <span>IN: {telemetry.activeCheckedIn}</span>
                 <span>OUT: {telemetry.completed}</span>
                 <span>REQ: {targetDuration > 0 ? `${targetDuration}M` : 'NONE'}</span>
-                <span className={telemetry.pendingSync > 0 ? 'text-amber-600 font-semibold' : 'text-emerald-600 font-semibold'}>
-                  {telemetry.pendingSync > 0 ? `${telemetry.pendingSync} QUEUED` : 'CLOUD SYNCED'}
-                </span>
               </div>
             </div>
 
@@ -674,7 +657,6 @@ const Dashboard = () => {
                     <th>Time In</th>
                     <th>Time Out</th>
                     <th>Status</th>
-                    <th>Sync</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -701,21 +683,11 @@ const Dashboard = () => {
                           {log.status || 'Checked-In'}
                         </span>
                       </td>
-                      <td>
-                        <span className="inline-flex items-center gap-1.5 text-xs font-mono text-slate-500">
-                          <span
-                            className={`w-1.5 h-1.5 rounded-full ${
-                              log.syncStatus === 'synced' ? 'bg-emerald-500' : 'bg-amber-500'
-                            }`}
-                          />
-                          {log.syncStatus || 'pending'}
-                        </span>
-                      </td>
                     </tr>
                   ))}
                   {filteredTableLogs.length === 0 && (
                     <tr>
-                      <td colSpan="5" className="text-center text-slate-400 py-12 text-xs font-mono">
+                      <td colSpan="4" className="text-center text-slate-400 py-12 text-xs font-mono">
                         NO MATCHING SCAN RECORDS
                       </td>
                     </tr>
