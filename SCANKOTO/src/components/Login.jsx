@@ -2,8 +2,8 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 
-const MIN_SCAN_DURATION_MS = 650;
-const VERIFIED_HOLD_MS = 550;
+const MIN_SCAN_DURATION_MS = 550;
+const VERIFIED_HOLD_MS = 500;
 const REJECTED_RESET_MS = 900;
 
 const RETICLE_STYLES = {
@@ -20,38 +20,31 @@ const CARD_BORDER_STYLES = {
   rejected: 'border-rose-400 shadow-md shadow-rose-500/10 animate-scan-reject'
 };
 
-const STATUS_META = {
-  idle: {
-    label: 'OPERATOR ACCESS TERMINAL',
-    color: 'text-slate-400',
-    buttonText: 'Sign In'
-  },
-  scanning: {
-    label: 'SCANNING CREDENTIALS...',
-    color: 'text-sky-600',
-    buttonText: 'Scanning...'
-  },
-  verified: {
-    label: 'IDENTITY VERIFIED',
-    color: 'text-emerald-600',
-    buttonText: 'Access Granted'
-  },
-  rejected: {
-    label: 'VERIFICATION FAILED',
-    color: 'text-rose-600',
-    buttonText: 'Sign In'
-  }
-};
-
 const Login = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [totpCode, setTotpCode] = useState('');
+  const [enrollmentData, setEnrollmentData] = useState(null); // { factorId, qrCode, secret }
+  const [isPreparingEnrollment, setIsPreparingEnrollment] = useState(false);
+  const [secretCopied, setSecretCopied] = useState(false);
+
   const [error, setError] = useState('');
   const [authState, setAuthState] = useState('idle'); // 'idle' | 'scanning' | 'verified' | 'rejected'
 
-  const { login } = useAuth();
+  const {
+    user,
+    mfaStatus,
+    totpFactorId,
+    isMfaVerified,
+    login,
+    startTotpEnrollment,
+    verifyTotpCode,
+    logout
+  } = useAuth();
+
   const navigate = useNavigate();
   const timerRef = useRef(null);
+  const enrollmentStartedRef = useRef(false);
 
   useEffect(() => {
     return () => {
@@ -59,11 +52,120 @@ const Login = () => {
     };
   }, []);
 
+  // Redirect if already fully verified at aal2 (e.g., visiting /login while signed in)
+  useEffect(() => {
+    if (isMfaVerified && authState === 'idle') {
+      navigate('/dashboard', { replace: true });
+    }
+  }, [isMfaVerified, authState, navigate]);
+
+  // Automatically initialize QR enrollment when an officer signs in without a verified TOTP factor
+  useEffect(() => {
+    if (!user || mfaStatus !== 'needs-enrollment') {
+      enrollmentStartedRef.current = false;
+      return;
+    }
+
+    if (enrollmentData || enrollmentStartedRef.current) return;
+    enrollmentStartedRef.current = true;
+
+    let isMounted = true;
+    setIsPreparingEnrollment(true);
+    setError('');
+
+    startTotpEnrollment()
+      .then((data) => {
+        if (isMounted) setEnrollmentData(data);
+      })
+      .catch((err) => {
+        if (isMounted) {
+          setError(err.message || 'Unable to initialize 2FA setup. Please try again.');
+          enrollmentStartedRef.current = false;
+        }
+      })
+      .finally(() => {
+        if (isMounted) setIsPreparingEnrollment(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [user, mfaStatus, enrollmentData, startTotpEnrollment]);
+
   const isBusy = authState === 'scanning' || authState === 'verified';
-  const currentMeta = STATUS_META[authState];
   const reticleClass = RETICLE_STYLES[authState];
 
-  const handleSubmit = async (e) => {
+  const isChallengeStep = Boolean(user && mfaStatus === 'needs-challenge');
+  const isEnrollmentStep = Boolean(user && mfaStatus === 'needs-enrollment');
+  const isMfaStep = isChallengeStep || isEnrollmentStep;
+
+  const getHeaderMeta = () => {
+    if (authState === 'scanning') {
+      return {
+        eyebrow: isMfaStep ? 'VERIFYING AUTHENTICATOR TOKEN...' : 'SCANNING CREDENTIALS...',
+        eyebrowColor: 'text-sky-600',
+        title: isEnrollmentStep
+          ? 'Configure 2FA'
+          : isChallengeStep
+          ? 'Two-Factor Check'
+          : 'SCANKOTO Console',
+        subtitle: isMfaStep
+          ? 'Validating 6-digit RFC 6238 TOTP code'
+          : 'Authenticate to manage attendance sessions'
+      };
+    }
+
+    if (authState === 'verified') {
+      return {
+        eyebrow: 'AAL2 ASSURANCE GRANTED',
+        eyebrowColor: 'text-emerald-600',
+        title: 'Access Granted',
+        subtitle: 'Opening attendance telemetry console...'
+      };
+    }
+
+    if (authState === 'rejected') {
+      return {
+        eyebrow: 'VERIFICATION FAILED',
+        eyebrowColor: 'text-rose-600',
+        title: isEnrollmentStep
+          ? 'Configure 2FA'
+          : isChallengeStep
+          ? 'Two-Factor Check'
+          : 'SCANKOTO Console',
+        subtitle: isMfaStep
+          ? 'Check device clock sync and re-enter 6-digit code'
+          : 'Authenticate to manage attendance sessions'
+      };
+    }
+
+    if (isEnrollmentStep) {
+      return {
+        eyebrow: 'SECURITY SETUP // STEP 2 OF 2',
+        eyebrowColor: 'text-amber-600',
+        title: 'Enroll Authenticator',
+        subtitle: 'Scan the QR code with Google Authenticator, Authy, or 1Password'
+      };
+    }
+
+    if (isChallengeStep) {
+      return {
+        eyebrow: '2FA CHALLENGE // AAL2 REQUIRED',
+        eyebrowColor: 'text-slate-500',
+        title: 'Verify Identity',
+        subtitle: 'Enter the 6-digit code from your authenticator app'
+      };
+    }
+
+    return {
+      eyebrow: 'OPERATOR ACCESS TERMINAL',
+      eyebrowColor: 'text-slate-400',
+      title: 'SCANKOTO Console',
+      subtitle: 'Authenticate to manage attendance sessions'
+    };
+  };
+
+  const handlePasswordSubmit = async (e) => {
     e.preventDefault();
     if (isBusy) return;
 
@@ -71,23 +173,26 @@ const Login = () => {
     setError('');
     setAuthState('scanning');
 
-    const scanStartedAt = Date.now();
+    const startedAt = Date.now();
 
     try {
-      await login(email, password);
-
-      const elapsed = Date.now() - scanStartedAt;
-      const remainingScanTime = Math.max(0, MIN_SCAN_DURATION_MS - elapsed);
+      const mfaResult = await login(email, password);
+      const remaining = Math.max(0, MIN_SCAN_DURATION_MS - (Date.now() - startedAt));
 
       timerRef.current = setTimeout(() => {
-        setAuthState('verified');
-        timerRef.current = setTimeout(() => {
-          navigate('/dashboard');
-        }, VERIFIED_HOLD_MS);
-      }, remainingScanTime);
+        if (mfaResult?.status === 'verified') {
+          setAuthState('verified');
+          timerRef.current = setTimeout(() => {
+            navigate('/dashboard', { replace: true });
+          }, VERIFIED_HOLD_MS);
+        } else {
+          // Transition cleanly into TOTP Enrollment or Challenge step
+          setTotpCode('');
+          setAuthState('idle');
+        }
+      }, remaining);
     } catch (err) {
-      const elapsed = Date.now() - scanStartedAt;
-      const remainingScanTime = Math.max(0, MIN_SCAN_DURATION_MS - elapsed);
+      const remaining = Math.max(0, MIN_SCAN_DURATION_MS - (Date.now() - startedAt));
 
       timerRef.current = setTimeout(() => {
         setAuthState('rejected');
@@ -96,9 +201,66 @@ const Login = () => {
         timerRef.current = setTimeout(() => {
           setAuthState('idle');
         }, REJECTED_RESET_MS);
-      }, remainingScanTime);
+      }, remaining);
     }
   };
+
+  const handleTotpSubmit = async (e) => {
+    e.preventDefault();
+    const cleanCode = totpCode.replace(/\D/g, '');
+    if (isBusy || cleanCode.length !== 6) return;
+
+    if (timerRef.current) clearTimeout(timerRef.current);
+    setError('');
+    setAuthState('scanning');
+
+    const startedAt = Date.now();
+    const activeFactorId = isEnrollmentStep ? enrollmentData?.factorId : totpFactorId;
+
+    try {
+      await verifyTotpCode(activeFactorId, cleanCode);
+      const remaining = Math.max(0, MIN_SCAN_DURATION_MS - (Date.now() - startedAt));
+
+      timerRef.current = setTimeout(() => {
+        setAuthState('verified');
+        timerRef.current = setTimeout(() => {
+          navigate('/dashboard', { replace: true });
+        }, VERIFIED_HOLD_MS);
+      }, remaining);
+    } catch (err) {
+      const remaining = Math.max(0, MIN_SCAN_DURATION_MS - (Date.now() - startedAt));
+
+      timerRef.current = setTimeout(() => {
+        setAuthState('rejected');
+        setTotpCode('');
+        setError(err.message || 'Invalid or expired 6-digit authenticator code.');
+
+        timerRef.current = setTimeout(() => {
+          setAuthState('idle');
+        }, REJECTED_RESET_MS);
+      }, remaining);
+    }
+  };
+
+  const handleSwitchAccount = async () => {
+    if (isBusy) return;
+    if (timerRef.current) clearTimeout(timerRef.current);
+    setError('');
+    setTotpCode('');
+    setEnrollmentData(null);
+    enrollmentStartedRef.current = false;
+    setAuthState('idle');
+    await logout();
+  };
+
+  const handleCopySecret = () => {
+    if (!enrollmentData?.secret) return;
+    navigator.clipboard.writeText(enrollmentData.secret);
+    setSecretCopied(true);
+    setTimeout(() => setSecretCopied(false), 2000);
+  };
+
+  const meta = getHeaderMeta();
 
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
@@ -119,7 +281,7 @@ const Login = () => {
           className={`pointer-events-none absolute bottom-3.5 right-3.5 z-20 w-4 h-4 border-b-2 border-r-2 rounded-br-xs transition-all duration-300 ${reticleClass}`}
         />
 
-        {/* Optical Laser Sweep Overlay (GPU-composited translateY) */}
+        {/* Optical Laser Sweep Overlay */}
         {authState === 'scanning' && (
           <div className="pointer-events-none absolute inset-0 z-10 overflow-hidden rounded-3xl">
             <div className="w-full h-full animate-optical-sweep">
@@ -149,12 +311,39 @@ const Login = () => {
             }`}
           >
             {authState === 'verified' ? (
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-white animate-scale-in" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                className="h-6 w-6 text-white animate-scale-in"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
               </svg>
             ) : authState === 'rejected' ? (
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-white animate-scale-in" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                className="h-6 w-6 text-white animate-scale-in"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            ) : isMfaStep ? (
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                className="h-6 w-6 text-emerald-400"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
+                />
               </svg>
             ) : (
               <span className="text-white font-mono font-bold text-lg tracking-tight">SP</span>
@@ -162,14 +351,12 @@ const Login = () => {
           </div>
 
           <span
-            className={`text-[10px] font-mono font-semibold uppercase tracking-widest mb-1 transition-colors duration-300 ${currentMeta.color}`}
+            className={`text-[10px] font-mono font-semibold uppercase tracking-widest mb-1 transition-colors duration-300 ${meta.eyebrowColor}`}
           >
-            {currentMeta.label}
+            {meta.eyebrow}
           </span>
-          <h2 className="text-2xl font-bold text-slate-900 tracking-tight">SCANKOTO Console</h2>
-          <p className="text-xs text-slate-500 text-center mt-1">
-            Authenticate to manage attendance sessions
-          </p>
+          <h2 className="text-2xl font-bold text-slate-900 tracking-tight">{meta.title}</h2>
+          <p className="text-xs text-slate-500 text-center mt-1">{meta.subtitle}</p>
         </div>
 
         {/* Inline Error Alert */}
@@ -179,61 +366,188 @@ const Login = () => {
           </div>
         )}
 
-        {/* Credentials Form */}
-        <form onSubmit={handleSubmit} className="space-y-4 relative z-20">
-          <div className="form-control">
-            <label className="label py-1">
-              <span className="label-text text-xs font-semibold text-slate-700">Email</span>
-            </label>
-            <input
-              type="email"
-              placeholder="admin@csu.edu.ph"
-              className="input input-bordered w-full bg-slate-50 focus:bg-white border-slate-200 text-slate-900 text-sm focus:border-slate-900 focus:outline-none rounded-xl disabled:opacity-70"
-              value={email}
-              onChange={(e) => {
-                setEmail(e.target.value);
-                if (error) setError('');
-              }}
-              disabled={isBusy}
-              required
-            />
-          </div>
+        {/* STAGE 1: Email & Password Credentials */}
+        {!isMfaStep && (
+          <form onSubmit={handlePasswordSubmit} className="space-y-4 relative z-20">
+            <div className="form-control">
+              <label className="label py-1">
+                <span className="label-text text-xs font-semibold text-slate-700">Email</span>
+              </label>
+              <input
+                type="email"
+                placeholder="admin@csu.edu.ph"
+                className="input input-bordered w-full bg-slate-50 focus:bg-white border-slate-200 text-slate-900 text-sm focus:border-slate-900 focus:outline-none rounded-xl disabled:opacity-70"
+                value={email}
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  if (error) setError('');
+                }}
+                disabled={isBusy}
+                required
+              />
+            </div>
 
-          <div className="form-control">
-            <label className="label py-1">
-              <span className="label-text text-xs font-semibold text-slate-700">Password</span>
-            </label>
-            <input
-              type="password"
-              placeholder="••••••••"
-              className="input input-bordered w-full bg-slate-50 focus:bg-white border-slate-200 text-slate-900 text-sm focus:border-slate-900 focus:outline-none rounded-xl disabled:opacity-70"
-              value={password}
-              onChange={(e) => {
-                setPassword(e.target.value);
-                if (error) setError('');
-              }}
-              disabled={isBusy}
-              required
-            />
-          </div>
+            <div className="form-control">
+              <label className="label py-1">
+                <span className="label-text text-xs font-semibold text-slate-700">Password</span>
+              </label>
+              <input
+                type="password"
+                placeholder="••••••••"
+                className="input input-bordered w-full bg-slate-50 focus:bg-white border-slate-200 text-slate-900 text-sm focus:border-slate-900 focus:outline-none rounded-xl disabled:opacity-70"
+                value={password}
+                onChange={(e) => {
+                  setPassword(e.target.value);
+                  if (error) setError('');
+                }}
+                disabled={isBusy}
+                required
+              />
+            </div>
 
-          <button
-            type="submit"
-            disabled={isBusy}
-            className={`btn border-none w-full mt-6 rounded-xl font-semibold text-sm shadow-2xs transition-colors duration-300 text-white ${
-              authState === 'verified'
-                ? 'bg-emerald-600 hover:bg-emerald-600'
-                : authState === 'scanning'
-                ? 'bg-slate-800'
-                : 'bg-slate-900 hover:bg-slate-800'
-            }`}
-          >
-            {authState === 'scanning' && (
-              <span className="w-2 h-2 rounded-full bg-sky-400 animate-ping mr-1.5" />
+            <button
+              type="submit"
+              disabled={isBusy}
+              className={`btn border-none w-full mt-6 rounded-xl font-semibold text-sm shadow-2xs transition-colors duration-300 text-white ${
+                authState === 'verified'
+                  ? 'bg-emerald-600 hover:bg-emerald-600'
+                  : authState === 'scanning'
+                  ? 'bg-slate-800'
+                  : 'bg-slate-900 hover:bg-slate-800'
+              }`}
+            >
+              {authState === 'scanning' && (
+                <span className="w-2 h-2 rounded-full bg-sky-400 animate-ping mr-1.5" />
+              )}
+              {authState === 'scanning'
+                ? 'Scanning...'
+                : authState === 'verified'
+                ? 'Access Granted'
+                : 'Continue'}
+            </button>
+          </form>
+        )}
+
+        {/* STAGE 2: TOTP Enrollment or Challenge */}
+        {isMfaStep && (
+          <form onSubmit={handleTotpSubmit} className="space-y-4 relative z-20 animate-panel-enter">
+            {/* Active Officer Pill */}
+            <div className="bg-slate-50 border border-slate-200/80 rounded-xl px-3.5 py-2 flex items-center justify-between gap-2">
+              <span className="text-[11px] font-mono text-slate-600 truncate">{user?.email}</span>
+              <span className="text-[10px] font-mono font-bold uppercase px-2 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 flex-shrink-0">
+                AAL1 → AAL2
+              </span>
+            </div>
+
+            {/* Enrollment QR & Secret Panel */}
+            {isEnrollmentStep && (
+              <div className="bg-slate-50 border border-slate-200/90 rounded-2xl p-4 flex flex-col items-center text-center space-y-3">
+                {isPreparingEnrollment || !enrollmentData ? (
+                  <div className="py-8 flex flex-col items-center">
+                    <span className="loading loading-spinner loading-md text-slate-900 mb-2"></span>
+                    <span className="text-[11px] font-mono text-slate-500">
+                      GENERATING TOTP SECRET...
+                    </span>
+                  </div>
+                ) : (
+                  <>
+                    <div className="bg-white p-2.5 rounded-2xl border border-slate-200 shadow-2xs">
+                      <img
+                        src={enrollmentData.qrCode}
+                        alt="TOTP Authenticator QR Code"
+                        className="w-40 h-40 block"
+                      />
+                    </div>
+
+                    <div className="w-full">
+                      <span className="text-[10px] font-mono uppercase tracking-wider text-slate-400 block mb-1">
+                        Manual Setup Key
+                      </span>
+                      <div className="flex items-center justify-between gap-2 bg-white border border-slate-200 rounded-xl px-3 py-1.5">
+                        <code className="text-[11px] font-mono font-bold text-slate-800 truncate select-all">
+                          {enrollmentData.secret}
+                        </code>
+                        <button
+                          type="button"
+                          onClick={handleCopySecret}
+                          className="text-[10px] font-mono font-bold uppercase px-2 py-0.5 rounded bg-slate-100 hover:bg-slate-900 text-slate-700 hover:text-white transition-colors flex-shrink-0"
+                        >
+                          {secretCopied ? 'COPIED' : 'COPY'}
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
             )}
-            {currentMeta.buttonText}
-          </button>
-        </form>
+
+            {/* 6-Digit Authenticator Code Input */}
+            <div className="form-control">
+              <label className="label py-1">
+                <span className="label-text text-xs font-semibold text-slate-700">
+                  {isEnrollmentStep ? 'Confirm 6-Digit Code' : 'Authenticator Code'}
+                </span>
+                <span className="text-[10px] font-mono text-slate-400">6 DIGITS</span>
+              </label>
+              <input
+                type="text"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                pattern="[0-9]{6}"
+                maxLength={6}
+                placeholder="000000"
+                className="input input-bordered w-full bg-slate-50 focus:bg-white border-slate-200 text-slate-900 font-mono text-center text-xl tracking-[0.45em] font-bold focus:border-slate-900 focus:outline-none rounded-xl disabled:opacity-70"
+                value={totpCode}
+                onChange={(e) => {
+                  const digitsOnly = e.target.value.replace(/\D/g, '').slice(0, 6);
+                  setTotpCode(digitsOnly);
+                  if (error) setError('');
+                }}
+                disabled={isBusy || (isEnrollmentStep && !enrollmentData)}
+                autoFocus
+                required
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={
+                isBusy ||
+                totpCode.length !== 6 ||
+                (isEnrollmentStep && !enrollmentData)
+              }
+              className={`btn border-none w-full rounded-xl font-semibold text-sm shadow-2xs transition-colors duration-300 text-white ${
+                authState === 'verified'
+                  ? 'bg-emerald-600 hover:bg-emerald-600'
+                  : authState === 'scanning'
+                  ? 'bg-slate-800'
+                  : 'bg-slate-900 hover:bg-slate-800 disabled:bg-slate-300'
+              }`}
+            >
+              {authState === 'scanning' && (
+                <span className="w-2 h-2 rounded-full bg-sky-400 animate-ping mr-1.5" />
+              )}
+              {authState === 'scanning'
+                ? 'Verifying Token...'
+                : authState === 'verified'
+                ? 'Access Granted'
+                : isEnrollmentStep
+                ? 'Activate 2FA & Enter Console'
+                : 'Verify & Enter Console'}
+            </button>
+
+            <div className="pt-1 text-center">
+              <button
+                type="button"
+                onClick={handleSwitchAccount}
+                disabled={isBusy}
+                className="text-xs font-medium text-slate-500 hover:text-slate-900 transition-colors"
+              >
+                ← Sign out or switch officer account
+              </button>
+            </div>
+          </form>
+        )}
       </div>
     </div>
   );

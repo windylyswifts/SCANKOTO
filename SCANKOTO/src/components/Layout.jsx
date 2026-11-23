@@ -179,7 +179,7 @@ const NAV_ITEMS = [
 ];
 
 const Layout = () => {
-  const { user, logout } = useAuth();
+  const { user, isMfaVerified, logout } = useAuth();
   const location = useLocation();
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
   const [isLeftPanelOpen, setIsLeftPanelOpen] = useState(false);
@@ -365,10 +365,17 @@ const Layout = () => {
         <div className="p-4 border-t border-slate-100">
           <div className="flex items-center justify-between bg-slate-50 border border-slate-200/80 p-2.5 rounded-xl">
             <div className="overflow-hidden">
-              <p className="text-[10px] font-mono uppercase tracking-wider text-slate-400">
-                Operator
-              </p>
-              <p className="text-xs font-medium text-slate-700 truncate">{user?.email}</p>
+              <div className="flex items-center gap-1.5">
+                <p className="text-[10px] font-mono uppercase tracking-wider text-slate-400">
+                  Operator
+                </p>
+                {isMfaVerified && (
+                  <span className="text-[9px] font-mono font-bold uppercase px-1.5 py-0.2 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
+                    2FA · AAL2
+                  </span>
+                )}
+              </div>
+              <p className="text-xs font-medium text-slate-700 truncate mt-0.5">{user?.email}</p>
             </div>
             <button
               type="button"

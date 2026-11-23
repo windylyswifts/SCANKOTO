@@ -312,15 +312,23 @@ const Dashboard = () => {
     setStopError('');
 
     const now = new Date().toISOString();
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from('events')
       .update({ end_time: now })
-      .eq('event_id', activeEventId);
+      .eq('event_id', activeEventId)
+      .select('event_id');
 
     setIsStoppingEvent(false);
 
     if (error) {
       setStopError(error.message || 'Unable to lock session. Please try again.');
+      return;
+    }
+
+    if (!data || data.length === 0) {
+      setStopError(
+        'Action Denied: You do not have 2FA (AAL2) owner/editor permission to lock this session.'
+      );
       return;
     }
 
