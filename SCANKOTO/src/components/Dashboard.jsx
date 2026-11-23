@@ -90,30 +90,34 @@ const Dashboard = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isStopModalOpen, isStoppingEvent]);
 
-  // 1. Load non-archived events on mount
+  // 1. Load non-archived events owned by or shared with the signed-in officer
   useEffect(() => {
-    if (!user) return;
+    if (!user?.id) return;
 
     const loadEventsFromCloud = async () => {
-      const { data, error } = await supabase
-        .from('events')
-        .select('*')
-        .order('created_at', { ascending: false });
+      const [{ data: eventsData, error: eventsError }, { data: accessData }] = await Promise.all([
+        supabase.from('events').select('*').order('created_at', { ascending: false }),
+        supabase.from('event_access').select('event_id').eq('user_id', user.id)
+      ]);
 
-      if (error) {
-        console.error('Error fetching events:', error);
+      if (eventsError) {
+        console.error('Error fetching events:', eventsError);
         return;
       }
 
-      if (data?.length > 0) {
-        const activeOnly = data.filter((evt) => evt.is_archived !== true);
-        setCloudEvents(activeOnly);
-        if (activeOnly.length > 0) setActiveEvent(activeOnly[0]);
-      }
+      const sharedEventIds = new Set((accessData || []).map((row) => row.event_id));
+      const userActiveEvents = (eventsData || []).filter(
+        (evt) =>
+          evt.is_archived !== true &&
+          (evt.created_by === user.id || sharedEventIds.has(evt.event_id))
+      );
+
+      setCloudEvents(userActiveEvents);
+      setActiveEvent(userActiveEvents[0] || null);
     };
 
     loadEventsFromCloud();
-  }, [user]);
+  }, [user?.id]);
 
   // 2. Fetch Supabase attendance logs & detect live scan transitions
   const loadCloudLogs = useCallback(async () => {
@@ -144,7 +148,6 @@ const Dashboard = () => {
 
       formattedLogs.sort((a, b) => (b.checkOutTime || b.timestamp) - (a.checkOutTime || a.timestamp));
 
-      // Seed baseline states on initial load of an event so historical rows don't flood the feed
       if (seededEventIdRef.current !== currentEventId) {
         const initialStates = new Map();
         formattedLogs.forEach((log) => {
@@ -156,7 +159,6 @@ const Dashboard = () => {
         return;
       }
 
-      // Detect genuine new check-in / check-out transitions synchronously
       const newlyTriggered = [];
       formattedLogs.forEach((log) => {
         const nextPhase = log.checkOutTime ? 'checked-out' : 'checked-in';
@@ -733,7 +735,7 @@ const Dashboard = () => {
           />
         )}
         <aside className="w-full h-full border-l border-slate-200 p-6 overflow-y-auto bg-white">
-          {/* Fixed-Height Live Feed Container (Prevents Layout Shift) */}
+          {/* Fixed-Height Live Feed Container */}
           <div className="mb-8">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-[11px] font-mono font-semibold uppercase tracking-wider text-slate-400">

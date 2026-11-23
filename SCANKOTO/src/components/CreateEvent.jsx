@@ -365,6 +365,24 @@ const CreateEvent = () => {
     setIsSubmitting(true);
 
     try {
+      // Prevent slug collision across different officer accounts
+      const { data: existingEvent } = await supabase
+        .from('events')
+        .select('event_id, created_by')
+        .eq('event_id', eventIdSlug)
+        .maybeSingle();
+
+      if (existingEvent && existingEvent.created_by && existingEvent.created_by !== userId) {
+        setHasAttemptedSubmit(true);
+        setIsShaking(true);
+        setIsSubmitting(false);
+        setFormError(
+          `The session slug "${eventIdSlug}" is already in use by another officer. Add a date or organization tag to your title.`
+        );
+        scrollToSection(detailsSectionRef, titleInputRef);
+        return;
+      }
+
       const newEventConfig = {
         event_id: eventIdSlug,
         event_name: eventName.trim(),

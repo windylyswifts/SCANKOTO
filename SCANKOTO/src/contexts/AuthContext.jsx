@@ -8,7 +8,7 @@ export const useAuth = () => useContext(AuthContext);
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [aal, setAal] = useState(null); // 'aal1' | 'aal2' | null
-  const [mfaStatus, setMfaStatus] = useState('unauthenticated'); // 'unauthenticated' | 'checking' | 'needs-enrollment' | 'needs-challenge' | 'verified'
+  const [mfaStatus, setMfaStatus] = useState('unauthenticated'); // 'unauthenticated' | 'needs-enrollment' | 'needs-challenge' | 'verified'
   const [totpFactorId, setTotpFactorId] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -51,7 +51,6 @@ export const AuthProvider = ({ children }) => {
       return { status: 'needs-enrollment', factorId: null };
     } catch (err) {
       console.error('[AuthContext] MFA evaluation failed:', err);
-      // Fail closed to challenge/enrollment rather than granting unverified access
       setAal('aal1');
       setMfaStatus('needs-challenge');
       return { status: 'needs-challenge', factorId: null };
@@ -120,8 +119,42 @@ export const AuthProvider = ({ children }) => {
     return await evaluateMfaStatus(signedInUser);
   };
 
+  const register = async (email, password) => {
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        emailRedirectTo: `${window.location.origin}/login`
+      }
+    });
+
+    if (error) throw error;
+
+    // Supabase returns an empty identities array if the email is already registered (when Confirm Email is enabled)
+    if (data?.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+      throw new Error('An account with this email already exists. Please sign in instead.');
+    }
+
+    // Case A: Email confirmation is enabled -> session is null until user clicks confirmation link
+    if (!data?.session) {
+      return {
+        requiresEmailConfirmation: true,
+        status: 'unauthenticated'
+      };
+    }
+
+    // Case B: Auto-confirm is enabled -> session starts at aal1 and immediately enters TOTP enrollment
+    const createdUser = data.user ?? null;
+    setUser(createdUser);
+    const mfaResult = await evaluateMfaStatus(createdUser);
+
+    return {
+      requiresEmailConfirmation: false,
+      ...mfaResult
+    };
+  };
+
   const startTotpEnrollment = async () => {
-    // Clean up any abandoned unverified TOTP factors before generating a fresh secret
     const { data: existingFactors } = await supabase.auth.mfa.listFactors();
     const unverifiedTotp = (existingFactors?.all || []).filter(
       (f) => f.factor_type === 'totp' && f.status !== 'verified'
@@ -188,6 +221,7 @@ export const AuthProvider = ({ children }) => {
         isMfaVerified,
         loading,
         login,
+        register,
         startTotpEnrollment,
         verifyTotpCode,
         logout
