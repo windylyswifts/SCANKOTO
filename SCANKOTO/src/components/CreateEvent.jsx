@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../utils/supabaseClient';
+import { useAuth } from '../contexts/AuthContext';
 
 const DURATION_PRESETS = [
   { label: '30m', hours: 0, minutes: 30 },
@@ -101,6 +102,7 @@ const formatDurationMinutes = (totalMins, includeDays = false) => {
 
 const CreateEvent = () => {
   const navigate = useNavigate();
+  const { user } = useAuth();
 
   // --- Session Metadata ---
   const [eventName, setEventName] = useState('');
@@ -354,20 +356,15 @@ const CreateEvent = () => {
       return;
     }
 
+    const userId = user?.id;
+    if (!userId) {
+      setFormError('Authentication expired. Please sign in again before creating a session.');
+      return;
+    }
+
     setIsSubmitting(true);
 
     try {
-      const {
-        data: { session }
-      } = await supabase.auth.getSession();
-      const userId = session?.user?.id;
-
-      if (!userId) {
-        setFormError('Authentication expired. Please sign in again before creating a session.');
-        setIsSubmitting(false);
-        return;
-      }
-
       const newEventConfig = {
         event_id: eventIdSlug,
         event_name: eventName.trim(),
@@ -379,12 +376,19 @@ const CreateEvent = () => {
         created_by: userId
       };
 
-      const { error: eventError } = await supabase
+      const { data: savedEvents, error: eventError } = await supabase
         .from('events')
-        .upsert([newEventConfig], { onConflict: 'event_id' });
+        .upsert([newEventConfig], { onConflict: 'event_id' })
+        .select('event_id');
 
       if (eventError) {
         throw new Error(`Failed to save session: ${eventError.message}`);
+      }
+
+      if (!savedEvents || savedEvents.length === 0) {
+        throw new Error(
+          'Session blocked by security policy. Verify your 2FA (AAL2) session and ownership permissions.'
+        );
       }
 
       const { error: accessError } = await supabase.from('event_access').upsert(
