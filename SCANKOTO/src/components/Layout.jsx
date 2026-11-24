@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { Link, useLocation, Outlet } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import BrandLogo from './BrandLogo';
 
 const Console3DIcon = ({ isActive }) => (
   <svg viewBox="0 0 24 24" className="w-4 h-4 overflow-visible" fill="none">
@@ -178,6 +179,11 @@ const NAV_ITEMS = [
   }
 ];
 
+const getActiveNavIndex = (pathname) =>
+  NAV_ITEMS.findIndex(
+    (item) => pathname === item.to || pathname.startsWith(`${item.to}/`)
+  );
+
 const Layout = () => {
   const { user, isMfaVerified, logout } = useAuth();
   const location = useLocation();
@@ -186,9 +192,8 @@ const Layout = () => {
 
   // Refs for morphing active navigation indicator & directional panel transition
   const navItemRefs = useRef([]);
-  const previousRouteIndexRef = useRef(
-    NAV_ITEMS.findIndex((item) => item.to === location.pathname)
-  );
+  const hasPaintedPillRef = useRef(false);
+  const previousRouteIndexRef = useRef(getActiveNavIndex(location.pathname));
   const panelContainerRef = useRef(null);
 
   const [indicatorStyle, setIndicatorStyle] = useState({
@@ -208,9 +213,18 @@ const Layout = () => {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
+  useEffect(() => {
+    if (!isLeftPanelOpen) return;
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') setIsLeftPanelOpen(false);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isLeftPanelOpen]);
+
   // Measure and glide the active navigation pill across items
   useLayoutEffect(() => {
-    const activeIndex = NAV_ITEMS.findIndex((item) => item.to === location.pathname);
+    const activeIndex = getActiveNavIndex(location.pathname);
     const activeEl = navItemRefs.current[activeIndex];
 
     if (activeEl) {
@@ -222,7 +236,8 @@ const Layout = () => {
       }));
 
       // Enable smooth transition after initial mount position is painted
-      if (!indicatorStyle.ready) {
+      if (!hasPaintedPillRef.current) {
+        hasPaintedPillRef.current = true;
         const frame = requestAnimationFrame(() => {
           setIndicatorStyle((prev) => ({ ...prev, ready: true }));
         });
@@ -231,11 +246,11 @@ const Layout = () => {
     } else {
       setIndicatorStyle((prev) => ({ ...prev, opacity: 0 }));
     }
-  }, [location.pathname, indicatorStyle.ready]);
+  }, [location.pathname, isMobile]);
 
   // Directional morph transition on main panel when switching routes
   useLayoutEffect(() => {
-    const currentIndex = NAV_ITEMS.findIndex((item) => item.to === location.pathname);
+    const currentIndex = getActiveNavIndex(location.pathname);
     const prevIndex = previousRouteIndexRef.current;
     previousRouteIndexRef.current = currentIndex;
 
@@ -290,15 +305,15 @@ const Layout = () => {
         }`}
       >
         {/* Brand Header */}
-        <div className="p-6 flex items-center gap-3 border-b border-slate-100">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-b from-slate-700 to-slate-950 text-white flex items-center justify-center font-mono font-bold text-xs tracking-tight border-b-2 border-slate-950 shadow-[0_3px_8px_rgba(15,23,42,0.28),inset_0_1px_0_rgba(255,255,255,0.2)]">
-            SP
+        <div className="p-5 flex items-center gap-3 border-b border-slate-100">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-b from-white to-slate-50 border border-slate-200/90 border-b-2 border-b-slate-300 flex items-center justify-center p-1 flex-shrink-0 shadow-[0_2px_6px_rgba(15,23,42,0.07),inset_0_1px_0_rgba(255,255,255,0.9)]">
+            <BrandLogo className="w-full h-full" />
           </div>
-          <div>
-            <span className="font-bold tracking-wider text-slate-900 block leading-none">
+          <div className="min-w-0">
+            <span className="font-bold tracking-wider text-slate-900 block leading-none truncate">
               SCANKOTO
             </span>
-            <span className="text-[10px] font-mono uppercase tracking-widest text-slate-400 mt-1 block">
+            <span className="text-[10px] font-mono uppercase tracking-widest text-slate-400 mt-1 block truncate">
               TELEMETRY SUITE
             </span>
           </div>
@@ -326,7 +341,9 @@ const Layout = () => {
             />
 
             {NAV_ITEMS.map((item, index) => {
-              const isActive = location.pathname === item.to;
+              const isActive =
+                location.pathname === item.to ||
+                location.pathname.startsWith(`${item.to}/`);
               return (
                 <li
                   key={item.to}
@@ -370,7 +387,7 @@ const Layout = () => {
                   Operator
                 </p>
                 {isMfaVerified && (
-                  <span className="text-[9px] font-mono font-bold uppercase px-1.5 py-0.2 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
+                  <span className="text-[9px] font-mono font-bold uppercase px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
                     2FA · AAL2
                   </span>
                 )}
@@ -379,7 +396,10 @@ const Layout = () => {
             </div>
             <button
               type="button"
-              onClick={logout}
+              onClick={() => {
+                closeSidebar();
+                logout();
+              }}
               className="w-7 h-7 rounded-lg flex items-center justify-center bg-gradient-to-b from-white to-slate-100 border border-slate-200 border-b-2 border-b-slate-300 text-slate-500 hover:text-rose-600 hover:border-rose-200 hover:border-b-rose-300 hover:-translate-y-0.5 active:translate-y-0 active:scale-95 ml-2 shadow-2xs transition-all flex-shrink-0"
               title="Sign Out"
             >
@@ -409,6 +429,7 @@ const Layout = () => {
         onClick={() => setIsLeftPanelOpen(true)}
         style={{ width: '28px', padding: 0 }}
         aria-label="Open Navigation"
+        aria-expanded={isLeftPanelOpen}
       >
         <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" />
