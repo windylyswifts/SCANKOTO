@@ -17,6 +17,16 @@ const LOG_FILTERS = [
 
 const MAX_NOTIFICATIONS = 4;
 
+const isSameCalendarDay = (tsA, tsB) => {
+  const dateA = new Date(tsA);
+  const dateB = new Date(tsB);
+  return (
+    dateA.getFullYear() === dateB.getFullYear() &&
+    dateA.getMonth() === dateB.getMonth() &&
+    dateA.getDate() === dateB.getDate()
+  );
+};
+
 const formatClockTime = (epochMs) => {
   if (!epochMs) return '—';
   return new Date(epochMs).toLocaleTimeString('en-US', {
@@ -248,9 +258,12 @@ const Dashboard = () => {
   const isEventEnded = activeEvent?.end_time ? new Date() > new Date(activeEvent.end_time) : false;
 
   const telemetry = useMemo(() => {
+    const now = Date.now();
     const total = logs.length;
     const completed = logs.filter((l) => Boolean(l.checkOutTime)).length;
-    const activeCheckedIn = total - completed;
+    const activeCheckedIn = logs.filter(
+      (l) => !l.checkOutTime && isSameCalendarDay(l.checkInTime || l.timestamp, now)
+    ).length;
     const attendanceRate =
       expectedCount > 0 ? Math.min(100, Math.round((total / expectedCount) * 100)) : 0;
 
