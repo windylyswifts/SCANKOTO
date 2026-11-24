@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { supabase } from '../utils/supabaseClient';
 import { useAuth } from '../contexts/AuthContext';
 import { exportToCSV } from '../utils/export';
+import { initDB } from '../utils/db';
 
 const ArchivedEvents = () => {
   const { user } = useAuth();
@@ -18,19 +19,45 @@ const ArchivedEvents = () => {
   const [purgeError, setPurgeError] = useState('');
 
   useEffect(() => {
-    const fetchArchived = async () => {
-      const { data, error } = await supabase
-        .from('events')
-        .select('*')
-        .eq('is_archived', true)
-        .order('created_at', { ascending: false });
+    if (!user?.id) return;
 
-      if (!error && data) setEvents(data);
+    let isMounted = true;
+
+    const fetchArchived = async () => {
+      const [{ data: eventsData, error: eventsError }, { data: accessData, error: accessError }] =
+        await Promise.all([
+          supabase
+            .from('events')
+            .select('*')
+            .eq('is_archived', true)
+            .order('created_at', { ascending: false }),
+          supabase.from('event_access').select('event_id').eq('user_id', user.id)
+        ]);
+
+      if (!isMounted) return;
+
+      if (eventsError) {
+        console.error('Error fetching archived events:', eventsError);
+      } else {
+        if (accessError) {
+          console.warn('Error fetching shared event access:', accessError);
+        }
+        const sharedEventIds = new Set((accessData || []).map((row) => row.event_id));
+        const officerArchived = (eventsData || []).filter(
+          (evt) => evt.created_by === user.id || sharedEventIds.has(evt.event_id)
+        );
+        setEvents(officerArchived);
+      }
+
       setLoading(false);
     };
 
-    if (user) fetchArchived();
-  }, [user]);
+    fetchArchived();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [user?.id]);
 
   // Close active modal layer on Escape key when idle
   useEffect(() => {
@@ -85,7 +112,7 @@ const ArchivedEvents = () => {
       .from('events')
       .update({ is_archived: false })
       .eq('event_id', eventId)
-      .select();
+      .select('event_id');
 
     setRestoring(false);
 
@@ -95,7 +122,9 @@ const ArchivedEvents = () => {
     }
 
     if (!data || data.length === 0) {
-      setInspectorError('Action Denied: You do not have permission to restore this session.');
+      setInspectorError(
+        'Action Denied: You do not have 2FA (AAL2) owner/editor permission to restore this session.'
+      );
       return;
     }
 
@@ -106,14 +135,15 @@ const ArchivedEvents = () => {
   const handleConfirmPurge = async () => {
     if (!purgeTarget || isPurging) return;
 
+    const targetId = purgeTarget.event_id;
     setIsPurging(true);
     setPurgeError('');
 
     const { data, error } = await supabase
       .from('events')
       .delete()
-      .eq('event_id', purgeTarget.event_id)
-      .select();
+      .eq('event_id', targetId)
+      .select('event_id');
 
     setIsPurging(false);
 
@@ -123,11 +153,25 @@ const ArchivedEvents = () => {
     }
 
     if (!data || data.length === 0) {
-      setPurgeError('Action Denied: You do not have permission to delete this archived record.');
+      setPurgeError(
+        'Action Denied: You do not have 2FA (AAL2) owner permission to delete this archived record.'
+      );
       return;
     }
 
-    setEvents((prev) => prev.filter((e) => e.event_id !== purgeTarget.event_id));
+    try {
+      const db = await initDB();
+      const tx = db.transaction('events', 'readwrite');
+      tx.objectStore('events').delete(targetId);
+    } catch (dbErr) {
+      console.warn('Local IndexedDB event cleanup skipped:', dbErr);
+    }
+
+    if (localStorage.getItem('scankoto_active_event') === targetId) {
+      localStorage.removeItem('scankoto_active_event');
+    }
+
+    setEvents((prev) => prev.filter((e) => e.event_id !== targetId));
     setPurgeTarget(null);
     setSelectedEvent(null);
   };
