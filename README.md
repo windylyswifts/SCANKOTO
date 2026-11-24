@@ -1,56 +1,31 @@
-# SCANKOTO
+# SCANKOTO — Offline-First PWA for Automated Event Attendance Tracking
 
-An offline-first Progressive Web App (PWA) for QR-based event attendance tracking, real-time telemetry, and clearance reporting built for student organizations.
+## 1. Overview
+SCANKOTO is an offline-first Progressive Web Application (PWA) designed to solve manual encoding bottlenecks, long check-in queues, and unreliable campus Wi-Fi/cellular connectivity during large student events at Caraga State University (CSU). Built for CSU student organization officers (such as CSU-ISS and LCO executives) and student attendees, the system enables sub-second optical QR code scanning of Student ID badges (`CSU-XXXXXX`), enforces a 5-minute anti-passback throttle, queues attendance records locally in IndexedDB while offline, and automatically synchronizes and reconciles multi-device timestamps with a cloud relational database upon reconnection.
 
----
+## 2. Features (implemented)
+- **Optical QR Code Scan Capture & Confirmation (`FR-01`, `F5`):** Real-time camera stream QR scanning via HTML5 `getUserMedia` API with centralized `CSU-XXXXXX` ID normalization and sub-second visual/audio feedback.
+- **Fallback Manual Student ID Lookup (`FR-02`, `F5`):** Drawer-based manual ID entry for damaged or unreadable QR badges, sharing the same centralized validation pipeline as optical scanning.
+- **5-Minute Anti-Passback Duplicate Throttle (`BR-03`, `F2`):** Client-side `ThrottleValidator` preventing accidental double scans of the same student within a 300-second window.
+- **Offline-First Local Queue Persistence (`ADR-001`, `F2`):** Encapsulated `LocalQueueRepository` over `IndexedDBStore` (`scankoto_local_db`) storing pending check-in/check-out records locally without internet access.
+- **Background Sync & Cross-Device Timestamp Reconciliation (`FR-04`, `F3`):** Service Worker background sync paired with `AttendanceSyncReconciler` to sort and merge out-of-order offline scans across multiple officer devices before evaluation.
+- **Attendance Duration Rule Engine (`FR-03`, `BR-04`):** Evaluates `Check-Out - Check-In` duration against configurable event minimum thresholds to classify attendance validity (`Complete` vs. `Incomplete`).
+- **Executive Analytics & Automated CSV/XLSX Report Export (`FR-05`, `F1`, `F4`):** Live headcount summary metrics via `AnalyticsQueryService` (data-minimized DTOs) and tabular CSV/XLSX export with decoupled `EmailNotificationGateway` dispatch.
 
-## Core Features
+## 3. Technologies and versions
+- **Languages:** JavaScript (ES2023+), SQL
+- **Frontend Framework & UI:** React `18.3` / `19.x`, Vite `6.x`, Tailwind CSS `v4`, DaisyUI `v5`, `html5-qrcode`
+- **Offline & PWA Layer:** Service Workers (Workbox), IndexedDB (`idb`), Web Background Sync API
+- **Backend & Database:** Node.js `v20.x LTS`, Express.js `4.x` (Modular Monolith per Refined HLD v2.0), PostgreSQL `16.x` / `18.x` (with Prisma ORM & Row-Level Security)
+- **Security & Testing Tools:** HTTPS/TLS 1.3, RFC 6238 TOTP 2FA, AES-256 field-level encryption (RA 10173 compliance), Vitest, ESLint, Prettier
 
-### 1. Security & Multi-Officer Access
-* **Self-Service Registration & Login:** Supports multi-user officer accounts with email verification and password validation.
-* **Mandatory TOTP Two-Factor Authentication (2FA):** Enforces RFC 6238 authenticator enrollment (`aal1` → `aal2`) before granting write access to sessions or rosters.
-* **Scoped Event Ownership:** Isolates active and archived sessions per officer account via `created_by` and `event_access` permissions while keeping field scanner and student portal routes publicly accessible.
+## 4. Installation and setup
+### 1. Requirements (software and versions)
+- Node.js `v20.x LTS` or higher and `npm` `v10.x`+
+- PostgreSQL `v16.x` or higher (or a Supabase/PostgreSQL instance)
+- Modern Chromium-based browser or mobile browser with camera permissions (for `getUserMedia` QR scanning)
 
-### 2. Session Initialization & Roster Management
-* **4-Step Guided Setup:** Configures session identity/slug, active time window, minimum required render duration, and CSV masterlist upload.
-* **CSV Masterlist Ingestion:** Parses, deduplicates, and validates student records (`id_number`, `full_name`, `program`, `year`) with downloadable templates.
-* **Session Gate Control:** Allows hosts to immediately lock active sessions, disabling field scanner submissions while keeping exports and student lookups available.
-
-### 3. Offline-First Field QR Scanner (`/scan/:eventId`)
-* **Automatic Roster Caching:** Hydrates session details and valid student rosters into IndexedDB upon launch so scanning works seamlessly without internet access.
-* **Background Queue & Sync:** Stores offline check-ins and check-outs locally and automatically reconciles records with Supabase once connectivity returns.
-* **Scan Safeguards:** Includes a 5-minute duplicate scan cooldown, manual ID input fallback, camera switching, and anomaly flagging for IDs missing from the event masterlist.
-* **12:00 AM Midnight Cutoff:** Automatically expires unclosed check-ins at midnight so overnight hours cannot be accumulated; scanning on a subsequent day initiates a fresh check-in.
-
-### 4. Live Telemetry Console (`/dashboard`)
-* **Real-Time Feed:** Subscribes to Supabase Realtime updates to display live check-ins, check-outs, active venue headcount, and capacity progress.
-* **Search & Status Filtering:** Filters attendance logs by Student ID or clearance phase (`All`, `Checked-In`, `Completed`).
-* **One-Click Field Links:** Copies shareable URLs for officer scanner devices and the public student portal.
-
-### 5. Student Verification Portal & XLSX Exports
-* **Self-Service Portal (`/portal/:eventId`):** Lets students look up their Time In, Time Out, rendered minutes, and clearance status using their Student ID.
-* **Clearance Report Export (`.xlsx`):** Generates formatted Excel spreadsheets split into **Cleared Students** and **Pending / Not Cleared** tables based on minimum render duration requirements.
-
----
-
-## Tech Stack
-
-* **Frontend:** React, Vite, React Router, Tailwind CSS, DaisyUI
-* **Backend & Auth:** Supabase (PostgreSQL, Row-Level Security, Realtime, TOTP MFA)
-* **Offline Storage:** IndexedDB (local roster cache & pending sync queue)
-* **Utilities:** `@yudiel/react-qr-scanner`, SheetJS (`xlsx`)
-
----
-
-## Getting Started
-
-### Prerequisites
-* Node.js (v18+ recommended)
-* A Supabase project with **Email Sign-Ups** and **TOTP MFA** enabled
-
-### Installation
-
-1. **Clone the repository**
-   ```bash
-   git clone [https://github.com/your-username/scankoto.git](https://github.com/your-username/scankoto.git)
-   cd scankoto
+### 2. Steps to download / clone
+```bash
+git clone [https://github.com/windylyswifts/scankoto-pwa.git](https://github.com/windylyswifts/scankoto-pwa.git)
+cd scankoto-pwa
