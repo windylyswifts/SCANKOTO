@@ -17,6 +17,16 @@ import { syncPendingRecords } from '../utils/sync';
 const COOLDOWN_MS = 300000; // 5 minutes
 const POST_DISMISS_GRACE_MS = 2000; // 2s grace window after closing modal so lingering QR frames don't self-throttle
 
+const isSameCalendarDay = (tsA, tsB) => {
+  const dateA = new Date(tsA);
+  const dateB = new Date(tsB);
+  return (
+    dateA.getFullYear() === dateB.getFullYear() &&
+    dateA.getMonth() === dateB.getMonth() &&
+    dateA.getDate() === dateB.getDate()
+  );
+};
+
 const triggerBeep = () => {
   try {
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -152,12 +162,10 @@ const AttendanceScanner = () => {
           if (status.event?.end_time && new Date() > new Date(status.event.end_time)) {
             setIsEventEnded(true);
           }
-          // Already cached for this event: refresh silently in background if online
           if (navigator.onLine) {
             syncOfflineCache({ blocking: false });
           }
         } else if (navigator.onLine) {
-          // Not yet cached for this event: hold scanner until roster finishes downloading
           await syncOfflineCache({ blocking: true });
         } else {
           setCachedStudentCount(0);
@@ -440,20 +448,36 @@ const AttendanceScanner = () => {
       let resultPayload = {};
       const formattedTime = formatDisplayTime(now, false);
 
-      if (!existingLog) {
+      // Midnight Cutoff: Any unclosed check-in from a previous calendar day expires at 12:00 AM
+      const existingCheckInTime = existingLog
+        ? existingLog.checkInTime || existingLog.timestamp
+        : null;
+      const isExpiredPriorDayCheckIn = Boolean(
+        existingLog &&
+          !existingLog.checkOutTime &&
+          existingCheckInTime &&
+          !isSameCalendarDay(existingCheckInTime, now)
+      );
+
+      if (!existingLog || isExpiredPriorDayCheckIn) {
         const initialStatus = isAnomaly ? 'Anomaly / Not on Masterlist' : 'Checked-In';
-        const newLog = {
+        const freshLogPayload = {
           studentId: studentIdClean,
           studentName,
           eventId: activeEvent,
           timestamp: now,
           checkInTime: now,
           checkOutTime: null,
+          durationMinutes: 0,
           status: initialStatus,
           syncStatus: 'pending'
         };
 
-        await saveAttendanceLog(newLog);
+        if (existingLog) {
+          await updateAttendanceLog({ ...existingLog, ...freshLogPayload });
+        } else {
+          await saveAttendanceLog(freshLogPayload);
+        }
 
         resultPayload = {
           type: 'Check-In',
@@ -467,7 +491,7 @@ const AttendanceScanner = () => {
             : 'Initial Check-In Logged'
         };
       } else if (!existingLog.checkOutTime) {
-        const checkInTime = existingLog.checkInTime || existingLog.timestamp;
+        const checkInTime = existingCheckInTime;
         const elapsedMs = Math.max(0, now - checkInTime);
         const elapsedMinutes = Math.floor(elapsedMs / 60000);
         const minDurationMinutes = await resolveMinDuration();

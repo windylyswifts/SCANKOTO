@@ -1,6 +1,11 @@
 import * as XLSX from 'xlsx';
 import { supabase } from './supabaseClient';
 
+const isSameCalendarDay = (dateA, dateB) =>
+  dateA.getFullYear() === dateB.getFullYear() &&
+  dateA.getMonth() === dateB.getMonth() &&
+  dateA.getDate() === dateB.getDate();
+
 export const exportToCSV = async (logs, targetDurationMinutes = 0, eventName = 'Event') => {
   if (!logs || logs.length === 0) {
     alert('No attendance records to export.');
@@ -20,7 +25,7 @@ export const exportToCSV = async (logs, targetDurationMinutes = 0, eventName = '
       studentMap[student.student_id] = student.full_name;
     });
 
-    // 2. Process all logs and calculate rendered minutes
+    // 2. Process all logs and calculate same-day rendered minutes
     const processedLogs = logs.map((log) => {
       const studentId = log.studentId || log.student_id;
       const rawCheckIn = log.checkInTime || log.check_in_time || log.timestamp;
@@ -28,15 +33,18 @@ export const exportToCSV = async (logs, targetDurationMinutes = 0, eventName = '
 
       const checkIn = rawCheckIn ? new Date(rawCheckIn) : null;
       const checkOut = rawCheckOut ? new Date(rawCheckOut) : null;
+      const hasValidSameDayCheckOut = Boolean(
+        checkIn && checkOut && isSameCalendarDay(checkIn, checkOut)
+      );
 
-      const diffMs = checkIn && checkOut ? Math.max(0, checkOut - checkIn) : 0;
+      const diffMs = hasValidSameDayCheckOut ? Math.max(0, checkOut - checkIn) : 0;
       const totalMinutes = Math.floor(diffMs / 60000);
 
-      // If a minimum duration is required, student must have checked out AND met the duration
+      // Must have a valid same-day check-out (and meet target duration if configured)
       const isCleared =
         targetDurationMinutes > 0
-          ? Boolean(checkOut) && totalMinutes >= targetDurationMinutes
-          : Boolean(checkOut) || totalMinutes >= targetDurationMinutes;
+          ? hasValidSameDayCheckOut && totalMinutes >= targetDurationMinutes
+          : hasValidSameDayCheckOut;
 
       return {
         idNumber: studentId,

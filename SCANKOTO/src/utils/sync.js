@@ -1,6 +1,16 @@
 import { supabase } from './supabaseClient';
 import { getPendingLogs, updateLocalLogSyncStatus } from './db';
 
+const isSameCalendarDay = (tsA, tsB) => {
+  const dateA = new Date(tsA);
+  const dateB = new Date(tsB);
+  return (
+    dateA.getFullYear() === dateB.getFullYear() &&
+    dateA.getMonth() === dateB.getMonth() &&
+    dateA.getDate() === dateB.getDate()
+  );
+};
+
 export const syncPendingRecords = async () => {
   if (!navigator.onLine) return false;
 
@@ -63,19 +73,33 @@ export const syncPendingRecords = async () => {
         let finalStatus = local.status || (finalCheckOut ? 'Completed / Valid' : 'Checked-In');
 
         if (cloud) {
-          // Preserve earliest Check-In
-          if (new Date(cloud.check_in_time).getTime() < new Date(finalCheckIn).getTime()) {
+          const cloudHasCheckOut = Boolean(cloud.check_out_time);
+          const isStalePriorDayCloudOpen =
+            !cloudHasCheckOut && !isSameCalendarDay(cloud.check_in_time, finalCheckIn);
+
+          // Preserve earliest Check-In only if cloud row is closed or from the same calendar day
+          if (
+            !isStalePriorDayCloudOpen &&
+            new Date(cloud.check_in_time).getTime() < new Date(finalCheckIn).getTime()
+          ) {
             finalCheckIn = cloud.check_in_time;
           }
 
           // Preserve latest Check-Out and its corresponding validation status
-          if (cloud.check_out_time) {
+          if (cloudHasCheckOut) {
             const cloudOut = new Date(cloud.check_out_time).getTime();
             const localOut = finalCheckOut ? new Date(finalCheckOut).getTime() : 0;
             if (cloudOut >= localOut) {
               finalCheckOut = cloud.check_out_time;
               finalStatus = cloud.status || finalStatus;
             }
+          }
+
+          // Prevent any cross-day check-out pair from persisting across midnight
+          if (finalCheckOut && !isSameCalendarDay(finalCheckIn, finalCheckOut)) {
+            finalCheckIn = finalCheckOut;
+            finalCheckOut = null;
+            finalStatus = isAnomaly ? 'Anomaly / Not on Masterlist' : 'Checked-In';
           }
 
           const { data: updatedRows, error: updateErr } = await supabase
@@ -94,6 +118,12 @@ export const syncPendingRecords = async () => {
             throw new Error(`RLS blocked or row missing during attendance_logs UPDATE for ${local.studentId}`);
           }
         } else {
+          if (finalCheckOut && !isSameCalendarDay(finalCheckIn, finalCheckOut)) {
+            finalCheckIn = finalCheckOut;
+            finalCheckOut = null;
+            finalStatus = isAnomaly ? 'Anomaly / Not on Masterlist' : 'Checked-In';
+          }
+
           const { data: insertedRows, error: insertErr } = await supabase
             .from('attendance_logs')
             .insert([

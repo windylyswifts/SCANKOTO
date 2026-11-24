@@ -4,6 +4,11 @@ import { supabase } from '../utils/supabaseClient';
 
 const MIN_LOOKUP_SWEEP_MS = 450;
 
+const isSameCalendarDay = (dateA, dateB) =>
+  dateA.getFullYear() === dateB.getFullYear() &&
+  dateA.getMonth() === dateB.getMonth() &&
+  dateA.getDate() === dateB.getDate();
+
 const StudentPortal = () => {
   const { eventId } = useParams();
   const [studentId, setStudentId] = useState('');
@@ -78,14 +83,16 @@ const StudentPortal = () => {
         }
 
         const checkIn = new Date(logData.check_in_time);
-        const hasCheckedOut = Boolean(logData.check_out_time);
-        const checkOut = hasCheckedOut ? new Date(logData.check_out_time) : null;
+        const checkOut = logData.check_out_time ? new Date(logData.check_out_time) : null;
+        const hasValidSameDayCheckOut = Boolean(
+          checkOut && isSameCalendarDay(checkIn, checkOut)
+        );
 
-        const minutesRendered = hasCheckedOut
+        const minutesRendered = hasValidSameDayCheckOut
           ? Math.max(0, Math.floor((checkOut - checkIn) / 60000))
           : 0;
         const target = eventDetails?.min_duration_minutes || 0;
-        const isCleared = hasCheckedOut && minutesRendered >= target;
+        const isCleared = hasValidSameDayCheckOut && minutesRendered >= target;
 
         setResult({
           studentId: cleanId,
@@ -95,14 +102,14 @@ const StudentPortal = () => {
             minute: 'numeric',
             hour12: true
           }),
-          checkOut: hasCheckedOut
+          checkOut: checkOut
             ? checkOut.toLocaleTimeString('en-US', {
                 hour: 'numeric',
                 minute: 'numeric',
                 hour12: true
               })
             : 'Pending Check-Out',
-          hasCheckedOut,
+          hasCheckedOut: hasValidSameDayCheckOut,
           minutesRendered,
           target,
           isCleared
