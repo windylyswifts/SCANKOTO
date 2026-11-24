@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import BrandLogo from './BrandLogo';
 
 const MIN_SCAN_DURATION_MS = 550;
 const VERIFIED_HOLD_MS = 500;
@@ -50,11 +51,13 @@ const Login = () => {
 
   const navigate = useNavigate();
   const timerRef = useRef(null);
+  const copyTimerRef = useRef(null);
   const enrollmentStartedRef = useRef(false);
 
   useEffect(() => {
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
     };
   }, []);
 
@@ -329,11 +332,43 @@ const Login = () => {
     await logout();
   };
 
-  const handleCopySecret = () => {
+  const handleCopySecret = async () => {
     if (!enrollmentData?.secret) return;
-    navigator.clipboard.writeText(enrollmentData.secret);
-    setSecretCopied(true);
-    setTimeout(() => setSecretCopied(false), 2000);
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(enrollmentData.secret);
+      } else {
+        const tempInput = document.createElement('textarea');
+        tempInput.value = enrollmentData.secret;
+        tempInput.style.position = 'fixed';
+        tempInput.style.opacity = '0';
+        document.body.appendChild(tempInput);
+        tempInput.select();
+        document.execCommand('copy');
+        document.body.removeChild(tempInput);
+      }
+      setSecretCopied(true);
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = setTimeout(() => setSecretCopied(false), 2000);
+    } catch {
+      setError('Unable to copy automatically. Select and copy the setup key manually.');
+    }
+  };
+
+  const getEmblemContainerStyle = () => {
+    if (authState === 'verified') {
+      return 'bg-emerald-600 border-emerald-500 shadow-xs';
+    }
+    if (authState === 'rejected') {
+      return 'bg-rose-600 border-rose-500 shadow-xs';
+    }
+    if (isMfaStep) {
+      return 'bg-slate-900 border-slate-800 shadow-xs';
+    }
+    if (authState === 'scanning') {
+      return 'bg-sky-50/70 border-sky-300 shadow-xs';
+    }
+    return 'bg-gradient-to-b from-white to-slate-50 border-slate-200/90 shadow-xs';
   };
 
   const meta = getHeaderMeta();
@@ -378,18 +413,12 @@ const Login = () => {
         {/* Header & Emblem */}
         <div className="flex flex-col items-center mb-6 relative z-20">
           <div
-            className={`w-14 h-14 rounded-2xl flex items-center justify-center mb-4 shadow-xs transition-colors duration-300 ${
-              authState === 'verified'
-                ? 'bg-emerald-600'
-                : authState === 'rejected'
-                ? 'bg-rose-600'
-                : 'bg-slate-900'
-            }`}
+            className={`w-16 h-16 rounded-2xl border flex items-center justify-center mb-4 transition-colors duration-300 ${getEmblemContainerStyle()}`}
           >
             {authState === 'verified' ? (
               <svg
                 xmlns="http://www.w3.org/2000/svg"
-                className="h-6 w-6 text-white animate-scale-in"
+                className="h-7 w-7 text-white animate-scale-in"
                 fill="none"
                 viewBox="0 0 24 24"
                 stroke="currentColor"
@@ -399,7 +428,7 @@ const Login = () => {
             ) : authState === 'rejected' ? (
               <svg
                 xmlns="http://www.w3.org/2000/svg"
-                className="h-6 w-6 text-white animate-scale-in"
+                className="h-7 w-7 text-white animate-scale-in"
                 fill="none"
                 viewBox="0 0 24 24"
                 stroke="currentColor"
@@ -422,7 +451,7 @@ const Login = () => {
                 />
               </svg>
             ) : (
-              <span className="text-white font-mono font-bold text-lg tracking-tight">SP</span>
+              <BrandLogo className="w-12 h-12" />
             )}
           </div>
 
