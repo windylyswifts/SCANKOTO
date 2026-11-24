@@ -16,22 +16,41 @@ const ManageEvents = () => {
   const [actionError, setActionError] = useState('');
 
   useEffect(() => {
-    const fetchEvents = async () => {
-      const { data, error } = await supabase
-        .from('events')
-        .select('*')
-        .order('created_at', { ascending: false });
+    if (!user?.id) return;
 
-      if (error) {
-        console.error('Error fetching events:', error);
-      } else if (data) {
-        setEvents(data);
+    let isMounted = true;
+
+    const fetchEvents = async () => {
+      const [{ data: eventsData, error: eventsError }, { data: accessData, error: accessError }] =
+        await Promise.all([
+          supabase.from('events').select('*').order('created_at', { ascending: false }),
+          supabase.from('event_access').select('event_id').eq('user_id', user.id)
+        ]);
+
+      if (!isMounted) return;
+
+      if (eventsError) {
+        console.error('Error fetching events:', eventsError);
+      } else {
+        if (accessError) {
+          console.warn('Error fetching shared event access:', accessError);
+        }
+        const sharedEventIds = new Set((accessData || []).map((row) => row.event_id));
+        const officerEvents = (eventsData || []).filter(
+          (evt) => evt.created_by === user.id || sharedEventIds.has(evt.event_id)
+        );
+        setEvents(officerEvents);
       }
+
       setLoading(false);
     };
 
-    if (user) fetchEvents();
-  }, [user]);
+    fetchEvents();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [user?.id]);
 
   // Close modal on Escape key when idle
   useEffect(() => {
@@ -72,14 +91,16 @@ const ManageEvents = () => {
           .from('events')
           .update({ is_archived: true })
           .eq('event_id', eventId)
-          .select();
+          .select('event_id');
 
         if (error) {
           throw new Error(`Failed to archive session: ${error.message}`);
         }
 
         if (!data || data.length === 0) {
-          throw new Error('Action Denied: You do not have permission to archive this session.');
+          throw new Error(
+            'Action Denied: You do not have 2FA (AAL2) owner/editor permission to archive this session.'
+          );
         }
 
         setEvents((prev) =>
@@ -90,7 +111,7 @@ const ManageEvents = () => {
           .from('events')
           .delete()
           .eq('event_id', eventId)
-          .select();
+          .select('event_id');
 
         if (error) {
           throw new Error(`Failed to delete session: ${error.message}`);
@@ -98,7 +119,7 @@ const ManageEvents = () => {
 
         if (!data || data.length === 0) {
           throw new Error(
-            'Action Denied: You do not have permission to delete this session, or it was already removed.'
+            'Action Denied: You do not have 2FA (AAL2) owner permission to delete this session, or it was already removed.'
           );
         }
 
