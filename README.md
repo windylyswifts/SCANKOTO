@@ -1,10 +1,10 @@
 # SCANKOTO — Offline-First PWA for Automated Event Attendance Tracking
 
 ## 1. Overview
-SCANKOTO is an offline-first Progressive Web Application (PWA) designed to solve manual encoding bottlenecks, long check-in queues, and unreliable campus Wi-Fi/cellular connectivity during large student events at Caraga State University (CSU). Built for CSU student organization officers (such as CSU-ISS and LCO executives) and student attendees, the system enables sub-second optical QR code scanning of Student ID badges (`CSU-XXXXXX`), enforces a 5-minute anti-passback throttle, queues attendance records locally in IndexedDB while offline, and automatically synchronizes and reconciles multi-device timestamps with a cloud relational database upon reconnection.
+SCANKOTO is an offline-first Progressive Web Application (PWA) designed to solve manual encoding bottlenecks, long check-in queues, and unreliable campus Wi-Fi/cellular connectivity during large student events at Caraga State University (CSU). Built for CSU student organization officers (such as CSU-ISS and LCO executives) and student attendees, the system enables sub-second optical QR code scanning of Student ID (`2XX-XXXXXX`), enforces a 5-minute anti-passback throttle, queues attendance records locally in IndexedDB while offline, and automatically synchronizes and reconciles multi-device timestamps with a cloud relational database upon reconnection.
 
 ## 2. Features (implemented)
-- **Optical QR Code Scan Capture & Confirmation (`FR-01`, `F5`):** Real-time camera stream QR scanning via HTML5 `getUserMedia` API with centralized `CSU-XXXXXX` ID normalization and sub-second visual/audio feedback.
+- **Optical QR Code Scan Capture & Confirmation (`FR-01`, `F5`):** Real-time camera stream QR scanning via HTML5 `getUserMedia` API with centralized `2XX-XXXXXX` ID normalization and sub-second visual/audio feedback.
 - **Fallback Manual Student ID Lookup (`FR-02`, `F5`):** Drawer-based manual ID entry for damaged or unreadable QR badges, sharing the same centralized validation pipeline as optical scanning.
 - **5-Minute Anti-Passback Duplicate Throttle (`BR-03`, `F2`):** Client-side `ThrottleValidator` preventing accidental double scans of the same student within a 300-second window.
 - **Offline-First Local Queue Persistence (`ADR-001`, `F2`):** Encapsulated `LocalQueueRepository` over `IndexedDBStore` (`scankoto_local_db`) storing pending check-in/check-out records locally without internet access.
