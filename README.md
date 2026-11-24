@@ -111,4 +111,4 @@ scankoto-pwa/
 - **Camera Autofocus Dependency on Low-End Devices:** Optical QR decoding speed relies on device camera hardware autofocus; severely scratched or low-contrast printed IDs require fallback manual ID entry (`FR-02`).
 
 ## 10. Final version
-Final commit ID: `<paste-final-commit-hash>`   Date: `November 25, 2026`
+Final commit ID: `<75bc813b3322522668a1752b326868d001eaee6f>`   Date: `November 25, 2026`
